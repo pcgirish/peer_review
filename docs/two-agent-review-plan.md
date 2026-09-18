@@ -1,6 +1,6 @@
 # Two-Agent Peer Review — Minimal Plan
 
-Status: Steps 1–5 done (see [feasibility-probe.md](feasibility-probe.md)). `review-loop plan` reviews a frozen snapshot of the plan and intent with either reviewer, keeps one reviewer session per artifact in state under the Git common dir (per-artifact OS locks, 3-round limit, `status`/`reset`/`extend`), and reports `stale` (exit 3, no round consumed) when the plan or intent changed during the review. `review-loop pr <number>` reviews a pull request from `gh` context, versions by head SHA + intent, runs the project's tests in a detached worktree of the PR head before the review, and can post each validated verdict as a plain PR comment with `--post-comment`. Skill installation (6) is not built.
+Status: Steps 1–6 done (see [feasibility-probe.md](feasibility-probe.md)). `review-loop plan` reviews a frozen snapshot of the plan and intent with either reviewer, keeps one reviewer session per artifact in state under the Git common dir (per-artifact OS locks, 3-round limit, `status`/`reset`/`extend`), and reports `stale` (exit 3, no round consumed) when the plan or intent changed during the review. `review-loop pr <number>` reviews a pull request from `gh` context, versions by head SHA + intent, runs the project's tests in a detached worktree of the PR head before the review, and can post each validated verdict as a plain PR comment with `--post-comment`. The shared `peer-review` skill lives in `.agents/skills/peer-review` (Codex) with `.claude/skills` symlinked to it (Claude Code); `scripts/install-peer-review.sh` installs the helper with `uv tool` and links the skill into `~/.claude/skills` and `~/.codex/skills` for other repositories.
 
 ## Goal and Boundary
 
@@ -26,7 +26,7 @@ The helper includes this Review Scope section in its reviewer prompt. The author
 
 ## Helper Contract
 
-Interface (`plan`, `status`, `reset`, `extend` implemented; `pr` pending):
+Interface (all implemented):
 
 ```text
 review-loop plan --file <path> --intent-file <path> --author <claude|codex>
