@@ -105,3 +105,25 @@ def fake_bin(tmp_path, monkeypatch):
     monkeypatch.delenv("FAKE_MODE", raising=False)
     monkeypatch.delenv("FAKE_PR", raising=False)
     return log
+
+
+def _git(cwd, *args):
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+@pytest.fixture
+def repo(tmp_path):
+    """A committed git repo at tmp_path/repo (kept apart from fake_bin's files)."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    (root / "README.md").write_text("x")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "init")
+    return root

@@ -1,4 +1,4 @@
-"""`review-loop` command line. Step 2 scope: one plan review call, no persisted state yet."""
+"""`review-loop` command line: plan review with persisted per-artifact state (Steps 2-3)."""
 
 from __future__ import annotations
 
@@ -7,13 +7,19 @@ import json
 import math
 import sys
 from pathlib import Path
+from typing import Any
 
 from review_loop.adapters import AGENTS, reviewer_for
 from review_loop.prompt import build_reviewer_prompt
-from review_loop.runner import DEFAULT_TIMEOUT, RecursionGuardError, run_review
+from review_loop.runner import DEFAULT_TIMEOUT, RecursionGuardError, ReviewOutcome, run_review
+from review_loop.state import ArtifactState, StateError, Store, repo_paths
 from review_loop.version import plan_version
 
 EXIT_APPROVED, EXIT_CHANGES, EXIT_ERROR = 0, 1, 2
+
+
+class CliError(Exception):
+    pass
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -22,14 +28,34 @@ def _parser() -> argparse.ArgumentParser:
 
     plan = sub.add_parser("plan", help="Review a plan file with the opposite agent.")
     plan.add_argument("--file", required=True, type=Path, help="plan file to review")
-    plan.add_argument("--intent-file", required=True, type=Path, help="verbatim user request")
-    plan.add_argument("--author", required=True, choices=AGENTS, help="agent that wrote the plan")
+    plan.add_argument("--intent-file", type=Path, help="verbatim user request (first call)")
+    plan.add_argument("--author", choices=AGENTS, help="agent that wrote the plan (first call)")
     plan.add_argument("--response-file", type=Path, help="author response to the previous round")
-    plan.add_argument("--session-id", help="existing reviewer session to resume")
-    plan.add_argument("--cwd", type=Path, default=Path.cwd(), help="reviewer working directory")
+    plan.add_argument("--id", help="existing artifact id; only when the file moved")
     plan.add_argument("--timeout", type=_timeout, default=DEFAULT_TIMEOUT, help="seconds (> 0)")
+    _add_cwd(plan)
     plan.set_defaults(func=_cmd_plan)
+
+    status = sub.add_parser("status", help="Show an artifact's saved state.")
+    status.add_argument("artifact", help="artifact id or repo-relative path")
+    _add_cwd(status)
+    status.set_defaults(func=_cmd_status)
+
+    reset = sub.add_parser("reset", help="Retire the reviewer session and reset rounds to 0/3.")
+    reset.add_argument("artifact", help="artifact id or repo-relative path")
+    _add_cwd(reset)
+    reset.set_defaults(func=_cmd_reset)
+
+    extend = sub.add_parser("extend", help="Raise the total round limit; keeps session and count.")
+    extend.add_argument("artifact", help="artifact id or repo-relative path")
+    extend.add_argument("--to", required=True, type=int, help="new total round limit")
+    _add_cwd(extend)
+    extend.set_defaults(func=_cmd_extend)
     return p
+
+
+def _add_cwd(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--cwd", type=Path, default=Path.cwd(), help="repository working directory")
 
 
 def _timeout(text: str) -> float:
@@ -49,48 +75,163 @@ def _read(path: Path, what: str) -> str:
         raise CliError(f"cannot read {what} {path}: {e.strerror}") from e
 
 
-class CliError(Exception):
-    pass
+def _store(cwd: Path) -> tuple[Store, Path]:
+    paths = repo_paths(cwd)
+    return Store(paths.common_dir), paths.toplevel
 
 
-def _cmd_plan(args: argparse.Namespace) -> dict:
-    content = _read(args.file, "plan file")
-    intent = _read(args.intent_file, "intent file")
-    response = _read(args.response_file, "response file") if args.response_file else None
-    reviewer = reviewer_for(args.author)
-    version = plan_version(content, intent)
+def _rel_path(file: Path, toplevel: Path) -> str:
     try:
-        rel = args.file.resolve().relative_to(args.cwd.resolve())
-    except ValueError:
-        rel = args.file
-    prompt = build_reviewer_prompt(
-        kind="plan",
-        version=version,
-        intent=intent,
-        artifact_label=f"Plan file: {rel}",
-        artifact_content=content,
-        author_response=response,
-    )
-    outcome = run_review(
-        reviewer,
-        prompt=prompt,
-        kind="plan",
-        version=version,
-        cwd=args.cwd,
-        session_id=args.session_id,
-        timeout=args.timeout,
-    )
-    return {"version": version, **outcome.to_dict()}
+        return file.resolve().relative_to(toplevel).as_posix()
+    except ValueError as e:
+        raise CliError(f"{file} is not inside the repository at {toplevel}") from e
+
+
+# --- plan --------------------------------------------------------------------
+
+
+def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
+    content = _read(args.file, "plan file")
+    store, toplevel = _store(args.cwd)
+    rel = _rel_path(args.file, toplevel)
+
+    if args.id:
+        state = store.move(args.id, rel) if store.load(args.id).path != rel else store.load(args.id)
+    else:
+        state = store.reserve("plan", rel)
+
+    if args.intent_file:
+        state.intent = _read(args.intent_file, "intent file")
+    if args.author:
+        state.author = args.author
+        state.reviewer = reviewer_for(args.author)
+    if state.intent is None:
+        raise CliError("--intent-file is required on the first review of a plan")
+    if state.author is None or state.reviewer is None:
+        raise CliError("--author is required on the first review of a plan")
+    response = _read(args.response_file, "response file") if args.response_file else None
+    if state.reviewer_cwd is None:
+        state.reviewer_cwd = str(toplevel)
+
+    with store.lock(state.id):
+        store.save(state)  # persist identity/mapping before the reviewer is contacted
+        if state.rounds >= state.limit:
+            raise CliError(
+                f"round limit reached ({state.rounds}/{state.limit}) for artifact {state.id}; "
+                "use `extend` or `reset`"
+            )
+        version = plan_version(content, state.intent)
+        resumed = state.session_id is not None
+        prompt = build_reviewer_prompt(
+            kind="plan",
+            version=version,
+            intent=state.intent,
+            artifact_label=f"Plan file: {rel}",
+            artifact_content=content,
+            author_response=response,
+        )
+        outcome = run_review(
+            state.reviewer,
+            prompt=prompt,
+            kind="plan",
+            version=version,
+            cwd=Path(state.reviewer_cwd),
+            session_id=state.session_id,
+            timeout=args.timeout,
+            on_session_id=lambda sid: _persist_session(store, state, sid),
+        )
+        _record(state, outcome, version, response, resumed=resumed)
+        store.save(state)
+    return {
+        "artifact": state.id,
+        "path": state.path,
+        "round": state.rounds,
+        "limit": state.limit,
+        "version": version,
+        **outcome.to_dict(),
+    }
+
+
+def _persist_session(store: Store, state: ArtifactState, sid: str) -> None:
+    """Save a new session id the moment it is known, so an interrupted first call
+    resumes the same reviewer session next time instead of silently starting another."""
+    state.session_id = sid
+    store.save(state)
+
+
+def _record(
+    state: ArtifactState,
+    outcome: ReviewOutcome,
+    version: str,
+    response: str | None,
+    *,
+    resumed: bool,
+) -> None:
+    if outcome.session_id and not resumed:
+        state.session_id = outcome.session_id
+    if outcome.status != "error":
+        state.rounds += 1
+        state.reviewed_version = version
+    state.last_status = outcome.status
+    entry: dict[str, Any] = {
+        "round": state.rounds if outcome.status != "error" else None,
+        "version": version,
+        "status": outcome.status,
+        "author_response": response,
+    }
+    if outcome.review:
+        entry["blocking_findings"] = outcome.review.blocking_findings
+        entry["suggestions"] = outcome.review.suggestions
+    if outcome.error:
+        entry["error"] = outcome.error
+    state.history.append(entry)
+    if resumed and outcome.error and "was not resumed" in outcome.error:
+        object.__setattr__(
+            outcome, "error", f"{outcome.error}. Session lost: run `review-loop reset {state.id}`"
+        )
+
+
+# --- status / reset / extend ---------------------------------------------------
+
+
+def _cmd_status(args: argparse.Namespace) -> dict[str, Any]:
+    store, _ = _store(args.cwd)
+    return store.resolve(args.artifact).to_dict()
+
+
+def _cmd_reset(args: argparse.Namespace) -> dict[str, Any]:
+    store, _ = _store(args.cwd)
+    state = store.resolve(args.artifact)
+    with store.lock(state.id):
+        state.reset()
+        store.save(state)
+    return state.to_dict()
+
+
+def _cmd_extend(args: argparse.Namespace) -> dict[str, Any]:
+    store, _ = _store(args.cwd)
+    state = store.resolve(args.artifact)
+    with store.lock(state.id):
+        if args.to <= state.limit:
+            raise CliError(f"--to must exceed the current limit ({state.limit})")
+        state.limit = args.to
+        store.save(state)
+    return state.to_dict()
+
+
+# --- entry point -------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         result = args.func(args)
-    except (CliError, RecursionGuardError, ValueError) as e:
+    except (CliError, StateError, RecursionGuardError, ValueError) as e:
         print(json.dumps({"status": "error", "error": str(e)}, indent=2))
         return EXIT_ERROR
     print(json.dumps(result, indent=2))
+    if args.command != "plan":
+        return EXIT_APPROVED
     return {"approved": EXIT_APPROVED, "changes_requested": EXIT_CHANGES}.get(
         result["status"], EXIT_ERROR
     )
