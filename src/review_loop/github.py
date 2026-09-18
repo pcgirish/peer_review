@@ -106,8 +106,9 @@ def checkout_revision(number: int, sha: str, *, dest: Path, cwd: Path) -> Path:
 
 
 def restore_worktree(dest: Path, sha: str) -> None:
-    """Make `dest` exactly `sha`: drop tracked edits and untracked files (ignored files,
-    such as a test venv, are kept)."""
+    """Check `sha` out at `dest`, discarding tracked edits and untracked files. Ignored
+    files (a test venv, caches) are deliberately kept, so the tree is pristine only with
+    respect to what git tracks or would show in `git status`."""
     _git(dest, "checkout", "-q", "--detach", sha, what="update the PR worktree")
     _git(dest, "reset", "-q", "--hard", sha, what="reset the PR worktree")
     _git(dest, "clean", "-fdq", what="clean the PR worktree")

@@ -661,3 +661,21 @@ def test_pr_worktree_is_restored_to_the_head_after_tests(fake_pr, pr_env, capsys
     assert (wt / "f.py").read_text() == "# feature work\n"
     assert not (wt / "junk.txt").exists()
     assert _git(wt, "status", "--porcelain") == ""
+
+
+def test_pr_head_recheck_failure_is_an_error_not_stale(fake_pr, pr_env, capsys, monkeypatch):
+    _mutate_during_review(monkeypatch, lambda: fake_pr.write_state(fail=True))
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    r = json.loads(out)
+    assert code == 2 and r["status"] == "error" and r["round"] == 0
+    assert "could not verify the PR head after the review" in r["error"]
+    assert "HTTP 502" in r["error"]
+
+
+def test_pr_history_records_the_helper_test_run(fake_pr, pr_env, capsys):
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, test_command="exit 3"))
+    r = json.loads(out)
+    assert code == 0
+    state = Store(repo_paths(fake_pr.repo).common_dir).load(r["artifact"])
+    tests = state.history[0]["tests"]
+    assert tests == [{"command": "exit 3", "exit_code": 3, "output": "", "run_by": "helper"}]

@@ -228,7 +228,8 @@ def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
         worktree = checkout_revision(
             pr.number, pr.head_sha, dest=store.worktree_dir(state.id), cwd=toplevel
         )
-        tests = [run_tests(state.test_command, cwd=worktree, timeout=args.timeout).to_prompt_dict()]
+        test_output = run_tests(state.test_command, cwd=worktree, timeout=args.timeout)
+        tests = [test_output.to_prompt_dict()]
         # tests may write into the worktree; the reviewer must see the PR head, nothing else
         restore_worktree(worktree, pr.head_sha)
         diff = pr_diff(pr.number, cwd=toplevel)
@@ -271,6 +272,8 @@ def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
             "pr_head": pr.head_sha,
             "pr_base": pr.base_sha,
             "head": repo_head(toplevel),
+            # the helper's own record, independent of what the reviewer echoes
+            "tests": [{**test_output.to_tests_run_entry(), "output": test_output.output}],
         }
         extra: dict[str, Any] = {}
         if args.post_comment and outcome.review is not None:
@@ -306,9 +309,20 @@ def _pr_stale_check(
         return outcome
     try:
         now_intent = _read(args.intent_file, "intent file") if args.intent_file else state.intent
+    except CliError as e:
+        return outcome.stale(f"inputs changed during review: {e}")
+    try:
         now_head = head_sha(args.number, cwd=toplevel)
-    except (CliError, GitHubError) as e:
-        return outcome.stale(f"inputs could not be re-checked after review: {e}")
+    except GitHubError as e:
+        # not a confirmed change: the verdict is unverifiable, which is an error, not stale
+        return ReviewOutcome(
+            "error",
+            outcome.reviewer,
+            outcome.session_id,
+            None,
+            f"could not verify the PR head after the review: {e}",
+            outcome.elapsed,
+        )
     if pr_version(now_head, now_intent) == version:
         return outcome
     changed = []
