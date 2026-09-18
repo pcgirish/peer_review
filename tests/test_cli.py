@@ -504,7 +504,7 @@ def test_git_helper_in_cli_tests(repo):
 # --- Step 5: PR loop -------------------------------------------------------------
 
 
-def pr_cmd(fake_pr, *extra, intent=True, author="claude"):
+def pr_cmd(fake_pr, *extra, intent=True, author="claude", test_command="true"):
     args = ["pr", "7", "--cwd", str(fake_pr.repo), "--timeout", "10"]
     if intent:
         i = fake_pr.repo / "intent.md"
@@ -512,6 +512,8 @@ def pr_cmd(fake_pr, *extra, intent=True, author="claude"):
         args += ["--intent-file", str(i)]
     if author:
         args += ["--author", author]
+    if test_command:
+        args += ["--test-command", test_command]
     return args + list(extra)
 
 
@@ -535,7 +537,7 @@ def test_pr_review_reviews_the_fetched_head(fake_pr, pr_env, capsys, fake_bin, a
     assert "diff --git a/f.py" in prompt and fake_pr.head_sha in prompt
     wt = store.worktree_dir(r["artifact"])
     assert str(wt) in prompt and _git(wt, "rev-parse", "HEAD") == fake_pr.head_sha
-    assert "No tests were run by the helper" in prompt
+    assert "### `true` — exit code 0" in prompt
 
 
 def test_pr_test_command_runs_in_the_pr_worktree_and_is_saved(fake_pr, pr_env, capsys, fake_bin):
@@ -545,10 +547,11 @@ def test_pr_test_command_runs_in_the_pr_worktree_and_is_saved(fake_pr, pr_env, c
     assert code == 0
     prompt = log_entries(fake_bin)[0]["argv"][-1]
     wt = Store(repo_paths(fake_pr.repo).common_dir).worktree_dir(r["artifact"])
+    assert "No tests were run by the helper" not in prompt
     assert f"### `{cmd}` — exit code 0" in prompt and "# feature work" in prompt
     assert str(wt.resolve()) in prompt
     # second call reuses the saved command
-    run_cli(capsys, *pr_cmd(fake_pr, intent=False, author=None))
+    run_cli(capsys, *pr_cmd(fake_pr, intent=False, author=None, test_command=None))
     assert f"### `{cmd}`" in log_entries(fake_bin)[1]["argv"][-1]
 
 
@@ -631,3 +634,30 @@ def test_pr_status_by_number(fake_pr, pr_env, capsys):
     _, out1, _ = run_cli(capsys, *pr_cmd(fake_pr))
     code, out, _ = run_cli(capsys, "status", "7", "--cwd", str(fake_pr.repo))
     assert code == 0 and json.loads(out)["id"] == json.loads(out1)["artifact"]
+
+
+def test_pr_first_review_requires_a_test_command(fake_pr, pr_env, capsys, fake_bin):
+    # the plan's contract: the helper runs the project tests before every PR review
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, test_command=None))
+    assert code == 2 and "--test-command is required on the first review of a PR" in out
+    assert not fake_bin.exists()  # no reviewer was spawned
+
+
+def test_pr_intent_changed_during_review_is_stale(fake_pr, pr_env, capsys, monkeypatch):
+    intent = fake_pr.repo / "intent.md"
+    _mutate_during_review(monkeypatch, lambda: intent.write_text("Add f, differently."))
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    r = json.loads(out)
+    assert code == 3 and r["status"] == "stale" and r["round"] == 0
+    assert "intent changed during review" in r["error"]
+
+
+def test_pr_worktree_is_restored_to_the_head_after_tests(fake_pr, pr_env, capsys, fake_bin):
+    cmd = "echo dirty >> f.py && echo junk > junk.txt"
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--test-command", cmd))
+    r = json.loads(out)
+    assert code == 0
+    wt = Store(repo_paths(fake_pr.repo).common_dir).worktree_dir(r["artifact"])
+    assert (wt / "f.py").read_text() == "# feature work\n"
+    assert not (wt / "junk.txt").exists()
+    assert _git(wt, "status", "--porcelain") == ""

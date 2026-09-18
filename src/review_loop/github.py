@@ -98,11 +98,19 @@ def checkout_revision(number: int, sha: str, *, dest: Path, cwd: Path) -> Path:
             "the PR moved, run the review again"
         )
     if (dest / ".git").exists():
-        _git(dest, "checkout", "-q", "--detach", sha, what="update the PR worktree")
+        restore_worktree(dest, sha)
     else:
         dest.parent.mkdir(parents=True, exist_ok=True)
         _git(cwd, "worktree", "add", "-q", "--detach", str(dest), sha, what="create PR worktree")
     return dest
+
+
+def restore_worktree(dest: Path, sha: str) -> None:
+    """Make `dest` exactly `sha`: drop tracked edits and untracked files (ignored files,
+    such as a test venv, are kept)."""
+    _git(dest, "checkout", "-q", "--detach", sha, what="update the PR worktree")
+    _git(dest, "reset", "-q", "--hard", sha, what="reset the PR worktree")
+    _git(dest, "clean", "-fdq", what="clean the PR worktree")
 
 
 def _git(cwd: Path, *args: str, what: str) -> str:

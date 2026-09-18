@@ -17,6 +17,7 @@ from review_loop.github import (
     head_sha,
     post_comment,
     pr_diff,
+    restore_worktree,
 )
 from review_loop.prompt import build_reviewer_prompt
 from review_loop.runner import DEFAULT_TIMEOUT, RecursionGuardError, ReviewOutcome, run_review
@@ -197,6 +198,9 @@ def _apply_inputs(
         raise CliError(f"--intent-file is required on the first review of a {noun}")
     if state.author is None or state.reviewer is None:
         raise CliError(f"--author is required on the first review of a {noun}")
+    if state.kind == "pr" and state.test_command is None:
+        # the helper runs the project's tests before every PR review (plan contract)
+        raise CliError("--test-command is required on the first review of a PR")
     response = _read(args.response_file, "response file") if args.response_file else None
     if state.reviewer_cwd is None:
         state.reviewer_cwd = str(toplevel)
@@ -224,11 +228,9 @@ def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
         worktree = checkout_revision(
             pr.number, pr.head_sha, dest=store.worktree_dir(state.id), cwd=toplevel
         )
-        tests = []
-        if state.test_command:
-            tests.append(
-                run_tests(state.test_command, cwd=worktree, timeout=args.timeout).to_prompt_dict()
-            )
+        tests = [run_tests(state.test_command, cwd=worktree, timeout=args.timeout).to_prompt_dict()]
+        # tests may write into the worktree; the reviewer must see the PR head, nothing else
+        restore_worktree(worktree, pr.head_sha)
         diff = pr_diff(pr.number, cwd=toplevel)
         snapshot = store.write_snapshot(
             state.id,
@@ -263,13 +265,7 @@ def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             on_session_id=lambda sid: _persist_session(store, state, sid),
         )
-        if outcome.status != "error":
-            now = head_sha(pr.number, cwd=toplevel)
-            if now != pr.head_sha:
-                outcome = outcome.stale(
-                    f"PR head moved during review ({pr.head_sha[:12]} -> {now[:12]}); "
-                    "verdict discarded"
-                )
+        outcome = _pr_stale_check(outcome, args, state, pr.head_sha, version, toplevel)
         context: dict[str, Any] = {
             "snapshot": str(snapshot),
             "pr_head": pr.head_sha,
@@ -294,6 +290,33 @@ def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
         **outcome.to_dict(),
         **extra,
     }
+
+
+def _pr_stale_check(
+    outcome: ReviewOutcome,
+    args: argparse.Namespace,
+    state: ArtifactState,
+    head: str,
+    version: str,
+    toplevel: Path,
+) -> ReviewOutcome:
+    """Re-derive the full version (head sha + intent) after the review; any drift means
+    the verdict covers a revision that no longer exists."""
+    if outcome.status == "error":
+        return outcome
+    try:
+        now_intent = _read(args.intent_file, "intent file") if args.intent_file else state.intent
+        now_head = head_sha(args.number, cwd=toplevel)
+    except (CliError, GitHubError) as e:
+        return outcome.stale(f"inputs could not be re-checked after review: {e}")
+    if pr_version(now_head, now_intent) == version:
+        return outcome
+    changed = []
+    if now_head != head:
+        changed.append(f"PR head moved during review ({head[:12]} -> {now_head[:12]})")
+    if now_intent != state.intent:
+        changed.append("intent changed during review")
+    return outcome.stale("; ".join(changed) + "; verdict discarded")
 
 
 _DIFF_MAX_CHARS = 200_000
