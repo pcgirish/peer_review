@@ -117,3 +117,24 @@ Exit codes: 0 approved, 1 changes requested, 2 error, 3 stale.
 | Round 3 with `--response-file` | `approved`, 27.4 s, round 3/3, same Codex thread since the first call. |
 
 The loop found four real defects in its own implementation before a human review. Comments are plain issue comments labelled with reviewer, version, round and verdict; no GitHub review or approval is submitted. Known limitation: the PR head is fetched from the remote named `origin`.
+
+## Step 6 — skill integration, live results
+
+Installed via `scripts/install-peer-review.sh`: `review-loop` on PATH from `uv tool`
+(editable), `~/.claude/skills/peer-review` and `~/.codex/skills/peer-review` symlinked
+to `.agents/skills/peer-review`. Both CLIs list the skill. Author direction Codex →
+reviewer Claude was exercised live below; the Claude → Codex direction was exercised
+throughout Steps 4–5 (PRs #7, #8).
+
+| Run | Result |
+|---|---|
+| Plan, scratch file, round 1 | `changes_requested` (2 real findings: `main()` would also print JSON; `None` status spelling) |
+| Round 2, one fix + one pushback in `--response-file` | `approved`, same session; pushback accepted |
+| Round 3, plan grew a step outside the intent | `changes_requested`: reviewer named the scope growth and asked for it to be dropped |
+| Call 4 | exit 2 `round limit reached (3/3) … use extend or reset`, reviewer not started |
+| `extend --to 4` | limit 4, rounds and session kept |
+| PR #9, `--author codex --post-comment`, first call | tests run by the helper on the PR head; `approved` round 1; comment posted |
+| Plan in a separate scratch repository, installed `review-loop --cwd <repo>` | `approved`; state created under that repository's `.git/review-loop` |
+
+Observed: `--file`/`--intent-file` resolve against the process working directory, not
+`--cwd`; the skill therefore says to run from inside the repository. Not changed.
