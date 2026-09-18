@@ -12,8 +12,9 @@ decides when to call it and what to do with the result.
 ## Preconditions
 
 - Do not invoke when `REVIEW_LOOP_REVIEWER=1` is set (you are the reviewer).
-- Run from inside the repository: `uv run review-loop …` in this repo, or plain
-  `review-loop …` where it was installed with `scripts/install-peer-review.sh`.
+- Run `uv run review-loop …` in this repo, or plain `review-loop …` where it was
+  installed with `scripts/install-peer-review.sh`. Outside the repository pass
+  `--cwd <repo>`; relative file arguments resolve against it.
 - If the host's plan mode blocks the helper from writing state or running, report
   the review as *pending* and stop. Do not claim a review happened.
 

@@ -136,5 +136,5 @@ throughout Steps 4–5 (PRs #7, #8).
 | PR #9, `--author codex --post-comment`, first call | tests run by the helper on the PR head; `approved` round 1; comment posted |
 | Plan in a separate scratch repository, installed `review-loop --cwd <repo>` | `approved`; state created under that repository's `.git/review-loop` |
 
-Observed: `--file`/`--intent-file` resolve against the process working directory, not
-`--cwd`; the skill therefore says to run from inside the repository. Not changed.
+Observed: `--file`/`--intent-file` resolved against the process working directory, not
+`--cwd`. Fixed after Step 6: relative file arguments now resolve against `--cwd`.
