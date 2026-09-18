@@ -1,6 +1,6 @@
 # Two-Agent Peer Review — Minimal Plan
 
-Status: Steps 1–2 done (see [feasibility-probe.md](feasibility-probe.md)). `review-loop plan` performs one review call with either reviewer; state, locks, and round limits (Steps 3–4), the PR loop (5), and skill installation (6) are not built.
+Status: Steps 1–3 done (see [feasibility-probe.md](feasibility-probe.md)). `review-loop plan` reviews a plan with either reviewer and keeps one reviewer session per artifact in state under the Git common dir, with per-artifact OS locks, a 3-round limit, and `status`/`reset`/`extend`. Snapshots and stale checks (Step 4), the PR loop (5), and skill installation (6) are not built.
 
 ## Goal and Boundary
 
@@ -26,7 +26,7 @@ The helper includes this Review Scope section in its reviewer prompt. The author
 
 ## Helper Contract
 
-Proposed interface, not yet implemented:
+Interface (`plan`, `status`, `reset`, `extend` implemented; `pr` pending):
 
 ```text
 review-loop plan --file <path> --intent-file <path> --author <claude|codex>

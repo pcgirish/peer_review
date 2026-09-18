@@ -149,3 +149,64 @@ def test_resume_with_replaced_session_is_error(fake_bin, tmp_path, reviewer, mon
     assert out.review is None
     assert out.session_id == "saved"
     assert "saved" in out.error
+
+
+@pytest.mark.parametrize("reviewer", ["claude", "codex"])
+def test_on_session_id_fires_before_the_call_completes(fake_bin, tmp_path, reviewer, monkeypatch):
+    """The session id must reach the caller while the reviewer is still running."""
+    import tempfile
+
+    monkeypatch.setenv("FAKE_MODE", "hang")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    seen: list[tuple[str, float]] = []
+    t0 = time.monotonic()
+    out = run_review(
+        reviewer,
+        prompt="P",
+        kind="plan",
+        version="v1",
+        cwd=tmp_path,
+        timeout=2,
+        on_session_id=lambda sid: seen.append((sid, time.monotonic() - t0)),
+    )
+    assert out.status == "error" and "timed out" in out.error
+    assert len(seen) == 1
+    sid, at = seen[0]
+    assert sid == out.session_id
+    assert at < 1.5, "id must be delivered before the timeout, not after"
+
+
+def test_on_session_id_not_called_on_resume(fake_bin, tmp_path):
+    seen = []
+    run_review(
+        "claude",
+        prompt="P",
+        kind="plan",
+        version="v1",
+        cwd=tmp_path,
+        timeout=10,
+        session_id="saved",
+        on_session_id=seen.append,
+    )
+    assert seen == []
+
+
+def test_keyboard_interrupt_kills_reviewer_and_keeps_session_id(fake_bin, tmp_path, monkeypatch):
+    import subprocess as sp
+
+    monkeypatch.setenv("FAKE_MODE", "hang")
+    real_wait = sp.Popen.wait
+
+    def interrupt(self, timeout=None):
+        if timeout is not None:  # the runner's guarded wait
+            time.sleep(0.3)
+            raise KeyboardInterrupt
+        return real_wait(self, timeout)
+
+    monkeypatch.setattr(sp.Popen, "wait", interrupt)
+    out = run_review("codex", prompt="P", kind="plan", version="v1", cwd=tmp_path, timeout=30)
+    assert out.status == "error" and "interrupted" in out.error
+    assert out.session_id == "thread-new"
+    entry = log_entries(fake_bin)[0]
+    time.sleep(0.2)
+    assert not pid_alive(entry["child_pid"])

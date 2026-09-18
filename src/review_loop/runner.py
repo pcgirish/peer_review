@@ -6,7 +6,9 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -68,12 +70,20 @@ def run_review(
     cwd: Path,
     session_id: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
+    on_session_id: Callable[[str], None] | None = None,
 ) -> ReviewOutcome:
+    """Run one review. `on_session_id` fires once, as soon as a *new* session's id is
+    known (before the reviewer is spawned when the adapter chooses it, otherwise as soon
+    as the reviewer announces it on stdout), so callers can persist it before the call
+    ends and a later interruption cannot orphan the session."""
     check_recursion_guard()
     adapter = get_adapter(reviewer)
     resume = session_id is not None
     if not resume:
         session_id = adapter.new_session_id()
+        if session_id and on_session_id:
+            on_session_id(session_id)
+            on_session_id = None
     inv = adapter.build(
         prompt=prompt,
         schema=review_schema(kind),
@@ -99,13 +109,20 @@ def run_review(
             )
         except OSError as e:
             return _outcome(reviewer, session_id, None, f"cannot start {inv.argv[0]}: {e}", started)
+        pump = _Pump(proc, adapter, on_session_id if not resume else None)
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_tree(proc)
-            stdout, stderr = proc.communicate()
+            stdout, _stderr = pump.finish()
             sid = session_id or adapter.session_id_from_partial(stdout)
             return _outcome(reviewer, sid, None, f"reviewer timed out after {timeout:g}s", started)
+        except KeyboardInterrupt:
+            _kill_tree(proc)
+            stdout, _stderr = pump.finish()
+            sid = session_id or adapter.session_id_from_partial(stdout)
+            return _outcome(reviewer, sid, None, "interrupted; reviewer terminated", started)
+        stdout, stderr = pump.finish()
         detail = f" (exit {proc.returncode}; stderr: {stderr.strip()[:300]!r})"
         if proc.returncode != 0:
             sid = session_id or adapter.session_id_from_partial(stdout)
@@ -125,6 +142,41 @@ def run_review(
         return _outcome(reviewer, parsed.session_id, review, error, started)
     finally:
         _cleanup(inv.temp_files)
+
+
+class _Pump:
+    """Drain stdout/stderr on threads; report the session id the moment it appears."""
+
+    def __init__(self, proc: subprocess.Popen, adapter, on_session_id) -> None:
+        self._proc = proc
+        self._adapter = adapter
+        self._cb = on_session_id
+        self._out: list[str] = []
+        self._err: list[str] = []
+        self._threads = [
+            threading.Thread(target=self._read_out, daemon=True),
+            threading.Thread(target=self._read_err, daemon=True),
+        ]
+        for t in self._threads:
+            t.start()
+
+    def _read_out(self) -> None:
+        for line in self._proc.stdout:
+            self._out.append(line)
+            if self._cb:
+                sid = self._adapter.session_id_from_partial("".join(self._out))
+                if sid:
+                    cb, self._cb = self._cb, None
+                    cb(sid)
+
+    def _read_err(self) -> None:
+        self._err.append(self._proc.stderr.read())
+
+    def finish(self) -> tuple[str, str]:
+        self._proc.wait()
+        for t in self._threads:
+            t.join()
+        return "".join(self._out), "".join(self._err)
 
 
 def _error_message(adapter, stdout: str) -> str | None:

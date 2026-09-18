@@ -79,3 +79,15 @@ Each `claude -p` call re-sends ~14–30 k cached tokens; a resumed session costs
 | Codex author → Claude reviewer | `changes_requested`, 1 finding, 58 s | `approved` in the same session, 11 s |
 
 Both reviewers honoured the schema (Claude via `structured_output`, Codex via the `-o` file), echoed the helper-supplied version string, and cited real file locations from the read-only checkout. `REVIEW_LOOP_REVIEWER=1` on the helper's own environment exits 2 before any reviewer spawns. Timeout kills the reviewer's whole process group and removes the Codex schema/output temp directory (unit-tested with fake CLIs).
+
+## Step 3 — session persistence, live results
+
+`review-loop plan` was run twice on `docs/two-agent-review-plan.md` (Claude author → Codex reviewer) from separate helper processes on 2026-09-18. State lives under `.git/review-loop/`; no session id was passed on the command line.
+
+| Call | Result |
+|---|---|
+| Round 1 (new artifact, intent file) | `approved`, 44.3 s; artifact id and Codex thread id saved |
+| Round 2 (`--response-file`, same path) | `changes_requested`, 2 findings, 47.6 s, resumed in the **same** thread (`argv` shows `resume <thread>`); round 2/3 |
+| `review-loop status <path>` | shows both rounds, the session id, and the per-round findings |
+
+Codex's round-2 findings were verified and fixed before the PR: (a) two concurrent first calls on an unknown path could each invent an id before any lock — path lookup/creation now happens under an index lock (`Store.reserve`); (b) a first call interrupted mid-review never persisted its thread id — the runner now streams stdout and reports the session id via `on_session_id` as soon as it appears (Claude: before spawn), and the CLI saves it immediately; Ctrl-C terminates the reviewer tree and keeps the id.
