@@ -80,7 +80,7 @@ def build_reviewer_prompt(
                 "- `tests_run`: every test command whose result you relied on, with `run_by` "
                 '"helper" for the runs listed above and "reviewer" for any you ran yourself'
             ),
-            "- `tests_not_run_reason`: required when `tests_run` is empty",
+            "- `tests_not_run_reason`: a string when `tests_run` is empty, otherwise `null`",
         ]
     return "\n".join(parts) + "\n"
 
