@@ -10,10 +10,19 @@ from pathlib import Path
 from typing import Any
 
 from review_loop.adapters import AGENTS, reviewer_for
+from review_loop.github import (
+    GitHubError,
+    checkout_revision,
+    fetch_pr,
+    head_sha,
+    post_comment,
+    pr_diff,
+)
 from review_loop.prompt import build_reviewer_prompt
 from review_loop.runner import DEFAULT_TIMEOUT, RecursionGuardError, ReviewOutcome, run_review
 from review_loop.state import ArtifactState, StateError, Store, repo_head, repo_paths
-from review_loop.version import plan_version
+from review_loop.tests_runner import _truncate, run_tests
+from review_loop.version import plan_version, pr_version
 
 EXIT_APPROVED, EXIT_CHANGES, EXIT_ERROR, EXIT_STALE = 0, 1, 2, 3
 
@@ -35,6 +44,23 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--timeout", type=_timeout, default=DEFAULT_TIMEOUT, help="seconds (> 0)")
     _add_cwd(plan)
     plan.set_defaults(func=_cmd_plan)
+
+    pr = sub.add_parser("pr", help="Review a pull request with the opposite agent.")
+    pr.add_argument("number", type=int, help="pull request number in the checkout's repository")
+    pr.add_argument("--intent-file", type=Path, help="verbatim user request (first call)")
+    pr.add_argument("--author", choices=AGENTS, help="agent that wrote the PR (first call)")
+    pr.add_argument("--response-file", type=Path, help="author response to the previous round")
+    pr.add_argument(
+        "--test-command", help="shell command the helper runs on the PR head (saved for reuse)"
+    )
+    pr.add_argument(
+        "--post-comment",
+        action="store_true",
+        help="post the validated verdict as a plain PR comment (helper posts, never the reviewer)",
+    )
+    pr.add_argument("--timeout", type=_timeout, default=DEFAULT_TIMEOUT, help="seconds (> 0)")
+    _add_cwd(pr)
+    pr.set_defaults(func=_cmd_pr)
 
     status = sub.add_parser("status", help="Show an artifact's saved state.")
     status.add_argument("artifact", help="artifact id or repo-relative path")
@@ -106,25 +132,7 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
                 raise CliError(f"artifact {artifact_id} is at {state.path!r}, not {rel!r}")
             state = store.move(artifact_id, rel)
 
-        if args.intent_file:
-            state.intent = _read(args.intent_file, "intent file")
-        if args.author:
-            state.author = args.author
-            state.reviewer = reviewer_for(args.author)
-        if state.intent is None:
-            raise CliError("--intent-file is required on the first review of a plan")
-        if state.author is None or state.reviewer is None:
-            raise CliError("--author is required on the first review of a plan")
-        response = _read(args.response_file, "response file") if args.response_file else None
-        if state.reviewer_cwd is None:
-            state.reviewer_cwd = str(toplevel)
-
-        store.save(state)
-        if state.rounds >= state.limit:
-            raise CliError(
-                f"round limit reached ({state.rounds}/{state.limit}) for artifact {state.id}; "
-                "use `extend` or `reset`"
-            )
+        response = _apply_inputs(state, args, toplevel, store)
         version = plan_version(content, state.intent)
         resumed = state.session_id is not None
         snapshot = store.write_snapshot(
@@ -170,6 +178,161 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         "version": version,
         **outcome.to_dict(),
     }
+
+
+def _apply_inputs(
+    state: ArtifactState, args: argparse.Namespace, toplevel: Path, store: Store
+) -> str | None:
+    """Merge this call's flags into the locked state, persist, and enforce the limit.
+    Returns the author response text, if any."""
+    noun = "plan" if state.kind == "plan" else "PR"
+    if args.intent_file:
+        state.intent = _read(args.intent_file, "intent file")
+    if args.author:
+        state.author = args.author
+        state.reviewer = reviewer_for(args.author)
+    if getattr(args, "test_command", None):
+        state.test_command = args.test_command
+    if state.intent is None:
+        raise CliError(f"--intent-file is required on the first review of a {noun}")
+    if state.author is None or state.reviewer is None:
+        raise CliError(f"--author is required on the first review of a {noun}")
+    response = _read(args.response_file, "response file") if args.response_file else None
+    if state.reviewer_cwd is None:
+        state.reviewer_cwd = str(toplevel)
+    store.save(state)
+    if state.rounds >= state.limit:
+        raise CliError(
+            f"round limit reached ({state.rounds}/{state.limit}) for artifact {state.id}; "
+            "use `extend` or `reset`"
+        )
+    return response
+
+
+# --- pr ----------------------------------------------------------------------
+
+
+def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
+    store, toplevel = _store(args.cwd)
+    artifact_id = store.reserve("pr", str(args.number)).id
+    with store.lock(artifact_id):
+        state = store.load(artifact_id)
+        response = _apply_inputs(state, args, toplevel, store)
+        pr = fetch_pr(args.number, cwd=toplevel)
+        version = pr_version(pr.head_sha, state.intent)
+        resumed = state.session_id is not None
+        worktree = checkout_revision(
+            pr.number, pr.head_sha, dest=store.worktree_dir(state.id), cwd=toplevel
+        )
+        tests = []
+        if state.test_command:
+            tests.append(
+                run_tests(state.test_command, cwd=worktree, timeout=args.timeout).to_prompt_dict()
+            )
+        diff = pr_diff(pr.number, cwd=toplevel)
+        snapshot = store.write_snapshot(
+            state.id,
+            version,
+            {
+                "pr.json": json.dumps(pr.__dict__, indent=2),
+                "diff.patch": diff,
+                "intent.md": state.intent,
+            },
+        )
+        prompt = build_reviewer_prompt(
+            kind="pr",
+            version=version,
+            intent=state.intent,
+            artifact_label=(
+                f"Pull request #{pr.number}: {pr.title} ({pr.url}); head {pr.head_sha} "
+                f"(branch {pr.head_ref}) onto {pr.base_ref}@{pr.base_sha}. The head revision is "
+                f"checked out read-only at {worktree.resolve()}; review that checkout, not the "
+                "working tree"
+            ),
+            artifact_content=_pr_content(pr.body, diff),
+            author_response=response,
+            tests=tests,
+        )
+        outcome = run_review(
+            state.reviewer,
+            prompt=prompt,
+            kind="pr",
+            version=version,
+            cwd=Path(state.reviewer_cwd),
+            session_id=state.session_id,
+            timeout=args.timeout,
+            on_session_id=lambda sid: _persist_session(store, state, sid),
+        )
+        if outcome.status != "error":
+            now = head_sha(pr.number, cwd=toplevel)
+            if now != pr.head_sha:
+                outcome = outcome.stale(
+                    f"PR head moved during review ({pr.head_sha[:12]} -> {now[:12]}); "
+                    "verdict discarded"
+                )
+        context: dict[str, Any] = {
+            "snapshot": str(snapshot),
+            "pr_head": pr.head_sha,
+            "pr_base": pr.base_sha,
+            "head": repo_head(toplevel),
+        }
+        extra: dict[str, Any] = {}
+        if args.post_comment and outcome.review is not None:
+            body = _comment_body(state, outcome, version, rounds=state.rounds + 1)
+            try:
+                extra["comment"] = post_comment(pr.number, body, cwd=toplevel)
+            except GitHubError as e:
+                extra["comment_error"] = str(e)
+        _record(state, outcome, version, response, resumed=resumed, context={**context, **extra})
+        store.save(state)
+    return {
+        "artifact": state.id,
+        "pr": pr.number,
+        "round": state.rounds,
+        "limit": state.limit,
+        "version": version,
+        **outcome.to_dict(),
+        **extra,
+    }
+
+
+_DIFF_MAX_CHARS = 200_000
+
+
+def _pr_content(body: str, diff: str) -> str:
+    parts = ["### PR description", "", body.strip() or "(empty)", "", "### Diff", "", "```diff"]
+    parts += [_truncate(diff, _DIFF_MAX_CHARS).rstrip(), "```"]
+    return "\n".join(parts)
+
+
+def _comment_body(
+    state: ArtifactState, outcome: ReviewOutcome, version: str, *, rounds: int
+) -> str:
+    review = outcome.review
+    assert review is not None
+    header = (
+        f"**review-loop** — reviewer: `{state.reviewer}` · version `{version}` · "
+        f"round {rounds}/{state.limit} · verdict: **{review.verdict}**"
+    )
+    lines = [header, ""]
+    if review.blocking_findings:
+        lines += ["**Blocking findings**", *[f"- {f}" for f in review.blocking_findings], ""]
+    if review.suggestions:
+        lines += ["**Suggestions**", *[f"- {s}" for s in review.suggestions], ""]
+    if review.tests_run:
+        lines += [
+            "**Tests run**",
+            *[f"- `{t.command}` → exit {t.exit_code} ({t.run_by})" for t in review.tests_run],
+            "",
+        ]
+    elif review.tests_not_run_reason:
+        lines += [f"**Tests not run:** {review.tests_not_run_reason}", ""]
+    footer = (
+        "_Posted by the helper on the reviewer's behalf; this is not a GitHub review or approval. "
+        "Author: reply on this PR with your response before pushing a revision._"
+    )
+    lines.append(footer)
+    return "\n".join(lines) + "\n"
 
 
 def _stale_check(
@@ -274,11 +437,11 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         result = args.func(args)
-    except (CliError, StateError, RecursionGuardError, ValueError) as e:
+    except (CliError, StateError, GitHubError, RecursionGuardError, ValueError) as e:
         print(json.dumps({"status": "error", "error": str(e)}, indent=2))
         return EXIT_ERROR
     print(json.dumps(result, indent=2))
-    if args.command != "plan":
+    if args.command not in ("plan", "pr"):
         return EXIT_APPROVED
     return {"approved": EXIT_APPROVED, "changes_requested": EXIT_CHANGES, "stale": EXIT_STALE}.get(
         result["status"], EXIT_ERROR

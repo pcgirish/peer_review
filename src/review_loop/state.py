@@ -75,6 +75,7 @@ class ArtifactState:
     session_id: str | None = None
     reviewer_cwd: str | None = None
     intent: str | None = None
+    test_command: str | None = None
     rounds: int = 0
     limit: int = DEFAULT_LIMIT
     reviewed_version: str | None = None
@@ -113,6 +114,9 @@ class Store:
 
     def lock_path(self, artifact_id: str) -> Path:
         return self.locks / f"{artifact_id}.lock"
+
+    def worktree_dir(self, artifact_id: str) -> Path:
+        return self.root / "worktrees" / artifact_id
 
     def snapshot_dir(self, artifact_id: str) -> Path:
         return self.root / "snapshots" / artifact_id
