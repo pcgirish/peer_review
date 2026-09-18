@@ -384,3 +384,33 @@ def test_reset_and_extend_reload_under_lock(fake_bin, plan_files, repo, capsys, 
         assert final.rounds == 2 and final.limit == 5
     else:
         assert final.rounds == 0
+
+
+@pytest.mark.parametrize("cmd", ["reset", "extend"])
+def test_reset_and_extend_act_on_the_locked_artifact_even_if_path_is_remapped(
+    fake_bin, plan_files, repo, capsys, monkeypatch, cmd
+):
+    plan, intent = plan_files
+    other = repo / "docs" / "other.md"
+    other.write_text("other")
+    _, out1, _ = run_cli(capsys, *plan_cmd(plan, intent, repo))
+    _, out2, _ = run_cli(capsys, *plan_cmd(other, intent, repo))
+    a, b = json.loads(out1)["artifact"], json.loads(out2)["artifact"]
+    store = Store(repo_paths(repo).common_dir)
+    real_lock = Store.lock
+
+    @__import__("contextlib").contextmanager
+    def lock_then_remap(self, artifact_id):
+        # between resolution and lock, docs/plan.md is re-pointed at artifact B
+        s = Store(self.root.parent)
+        idx = s._index()
+        idx["plan:docs/plan.md"] = b
+        s._write_index(idx)
+        with real_lock(self, artifact_id):
+            yield
+
+    monkeypatch.setattr(Store, "lock", lock_then_remap)
+    extra = ["--to", "5"] if cmd == "extend" else []
+    code, out, _ = run_cli(capsys, cmd, "docs/plan.md", "--cwd", str(repo), *extra)
+    assert code == 0 and json.loads(out)["id"] == a
+    assert store.load(b).limit == 3 and store.load(b).rounds == 1

@@ -206,8 +206,9 @@ def _cmd_status(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_reset(args: argparse.Namespace) -> dict[str, Any]:
     store, _ = _store(args.cwd)
-    with store.lock(store.resolve(args.artifact).id):
-        state = store.load(store.resolve(args.artifact).id)
+    artifact_id = store.resolve(args.artifact).id
+    with store.lock(artifact_id):
+        state = store.load(artifact_id)
         state.reset()
         store.save(state)
     return state.to_dict()
@@ -215,8 +216,9 @@ def _cmd_reset(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_extend(args: argparse.Namespace) -> dict[str, Any]:
     store, _ = _store(args.cwd)
-    with store.lock(store.resolve(args.artifact).id):
-        state = store.load(store.resolve(args.artifact).id)
+    artifact_id = store.resolve(args.artifact).id
+    with store.lock(artifact_id):
+        state = store.load(artifact_id)
         if args.to <= state.limit:
             raise CliError(f"--to must exceed the current limit ({state.limit})")
         state.limit = args.to
