@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Block direct commits to the main branch — create a feature/fix branch first.
+# Bypass intentionally with `git commit --no-verify` if you really must.
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [ "$branch" = "main" ]; then
+    echo "ERROR: direct commits to 'main' are not allowed." >&2
+    echo "       Create a branch first:  git checkout -b feature/<name>" >&2
+    exit 1
+fi
+exit 0

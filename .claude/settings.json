@@ -1,0 +1,52 @@
+{
+  "model": "sonnet",
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Edit(src/**)",
+      "Edit(tests/**)",
+      "Edit(docs/**)",
+      "Edit(.claude/**)",
+      "Edit(.agents/**)",
+      "Edit(AGENTS.md)",
+      "Edit(CLAUDE.md)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git checkout *)",
+      "Bash(git branch *)",
+      "Bash(git merge --no-ff *)",
+      "Bash(git push *)",
+      "Bash(git pull *)",
+      "Bash(git fetch *)",
+      "Bash(gh pr *)",
+      "Bash(gh repo *)",
+      "Bash(gh api *)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Edit(.env)",
+      "Bash(rm -rf *)",
+      "Bash(git push --force *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); case \"$cmd\" in *'git commit'*) [ \"$(git branch --show-current 2>/dev/null)\" = \"main\" ] && { echo '{\"continue\":false,\"stopReason\":\"ERROR: direct commits to main are not allowed \u2014 create a branch first\"}'; exit 2; } ;; esac; exit 0"
+          },
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); case \"$cmd\" in *'git merge'*) echo \"$cmd\" | grep -q -- '--no-ff' || { echo '{\"continue\":false,\"stopReason\":\"ERROR: git merge requires --no-ff \u2014 use: git merge --no-ff <branch>\"}'; exit 2; } ;; esac; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}
