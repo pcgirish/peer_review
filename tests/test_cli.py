@@ -1,6 +1,7 @@
 import fcntl
 import json
 import subprocess
+import time
 
 import pytest
 
@@ -700,4 +701,21 @@ def test_pr_timeout_is_one_deadline_for_tests_and_reviewer(fake_pr, pr_env, caps
 def test_pr_tests_exhausting_the_timeout_skip_the_reviewer(fake_pr, pr_env, capsys, fake_bin):
     code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--timeout", "1", test_command="sleep 5"))
     assert code == 2 and "tests exhausted the round's timeout" in out
+    assert not fake_bin.exists()  # no reviewer was spawned
+
+
+def test_pr_budget_spent_after_tests_still_skips_the_reviewer(
+    fake_pr, pr_env, capsys, fake_bin, monkeypatch
+):
+    import review_loop.cli as cli_mod
+
+    real = cli_mod.pr_diff
+
+    def slow_diff(*a, **kw):
+        time.sleep(1.5)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cli_mod, "pr_diff", slow_diff)
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--timeout", "1", test_command="true"))
+    assert code == 2 and "exhausted the round's timeout" in out
     assert not fake_bin.exists()  # no reviewer was spawned

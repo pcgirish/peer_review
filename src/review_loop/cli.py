@@ -235,8 +235,7 @@ def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
             state.test_command, cwd=worktree, timeout=max(deadline - time.monotonic(), 0.0)
         )
         tests = [test_output.to_prompt_dict()]
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if deadline - time.monotonic() <= 0:
             raise CliError(
                 f"tests exhausted the round's timeout ({args.timeout:g}s); reviewer not started"
             )
@@ -266,6 +265,14 @@ def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
             author_response=response,
             tests=tests,
         )
+        # recomputed last: restoring the worktree, fetching the diff and writing the
+        # snapshot also spend the round's budget
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CliError(
+                f"preparing the review exhausted the round's timeout ({args.timeout:g}s); "
+                "reviewer not started"
+            )
         outcome = run_review(
             state.reviewer,
             prompt=prompt,
