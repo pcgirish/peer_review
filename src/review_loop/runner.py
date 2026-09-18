@@ -104,11 +104,11 @@ def run_review(
         except subprocess.TimeoutExpired:
             _kill_tree(proc)
             stdout, stderr = proc.communicate()
-            sid = adapter.session_id_from_partial(stdout) or session_id
+            sid = session_id or adapter.session_id_from_partial(stdout)
             return _outcome(reviewer, sid, None, f"reviewer timed out after {timeout:g}s", started)
         detail = f" (exit {proc.returncode}; stderr: {stderr.strip()[:300]!r})"
         if proc.returncode != 0:
-            sid = adapter.session_id_from_partial(stdout) or session_id
+            sid = session_id or adapter.session_id_from_partial(stdout)
             msg = _error_message(adapter, stdout) or "reviewer exited with a nonzero status"
             return _outcome(reviewer, sid, None, f"{msg}{detail}", started)
         try:
@@ -116,7 +116,7 @@ def run_review(
                 stdout=stdout, session_id=session_id, output_file=inv.output_file
             )
         except InvalidReviewError as e:
-            sid = adapter.session_id_from_partial(stdout) or session_id
+            sid = session_id or adapter.session_id_from_partial(stdout)
             return _outcome(reviewer, sid, None, f"{e}{detail}", started)
         try:
             review = validate_review(parsed.review, kind=kind, expected_version=version)

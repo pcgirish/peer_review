@@ -147,4 +147,5 @@ def test_resume_with_replaced_session_is_error(fake_bin, tmp_path, reviewer, mon
     )
     assert out.status == "error"
     assert out.review is None
+    assert out.session_id == "saved"
     assert "saved" in out.error
