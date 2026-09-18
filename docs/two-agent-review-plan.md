@@ -1,6 +1,6 @@
 # Two-Agent Peer Review — Minimal Plan
 
-Status: design only. Helper unbuilt; skill uninstalled.
+Status: Steps 1–2 done (see [feasibility-probe.md](feasibility-probe.md)). `review-loop plan` performs one review call with either reviewer; state, locks, and round limits (Steps 3–4), the PR loop (5), and skill installation (6) are not built.
 
 ## Goal and Boundary
 

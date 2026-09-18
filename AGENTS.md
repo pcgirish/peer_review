@@ -1,16 +1,16 @@
 # peer_agent
 
-**Stack:** Other
+**Stack:** Python 3.12+, managed with `uv` (no runtime dependencies)
 
-**Structure:** `/src · /tests · /docs`
+**Structure:** `/src/review_loop · /tests · /docs`
 
 ## Commands (always use the run prefix — never bare executables)
 ```
-# fill in run command
-# fill in test command
-# fill in lint command
+uv run review-loop --help          # run
+uv run pytest -q                   # test
+uv run ruff check src tests && uv run ruff format --check src tests   # lint
 ```
-**Deps:** Fill in your package manager commands.
+**Deps:** `uv sync` installs the package (editable) and dev tools; `uv add --dev <pkg>` adds a dev dependency.
 
 ## Critical Rules
 - TDD RED-GREEN-Refactor — no implementation before a failing test
