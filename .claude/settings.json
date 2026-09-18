@@ -44,6 +44,10 @@
           {
             "type": "command",
             "command": "cmd=$(jq -r '.tool_input.command // \"\"'); case \"$cmd\" in *'git merge'*) echo \"$cmd\" | grep -q -- '--no-ff' || { echo '{\"continue\":false,\"stopReason\":\"ERROR: git merge requires --no-ff \u2014 use: git merge --no-ff <branch>\"}'; exit 2; } ;; esac; exit 0"
+          },
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); printf '%s' \"$cmd\" | grep -oE 'git push[^&;|]*' | while read -r seg; do if echo \"$seg\" | grep -qE '(^|[[:space:]]|:)main([[:space:]]|$)' || { ! echo \"$seg\" | grep -qE '^git push([[:space:]]+-[^[:space:]]*)*[[:space:]]+[^[:space:]-]+[[:space:]]+[^[:space:]-]' && [ \"$(git branch --show-current 2>/dev/null)\" = \"main\" ]; }; then echo '{\"continue\":false,\"stopReason\":\"ERROR: direct pushes to main are not allowed \u2014 open a PR\"}'; exit 2; fi; done; exit $?"
           }
         ]
       }

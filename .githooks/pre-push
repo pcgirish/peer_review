@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Block direct pushes to main — open a PR instead.
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "ERROR: direct pushes to 'main' are not allowed — open a PR." >&2
+        exit 1
+    fi
+done
+exit 0
