@@ -94,6 +94,9 @@ def _tests_run(obj: dict[str, Any]) -> list[TestRun]:
     for i, item in enumerate(v):
         if not isinstance(item, dict):
             raise InvalidReviewError(f"tests_run[{i}] must be an object")
+        extra = set(item) - {"command", "exit_code", "run_by"}
+        if extra:
+            raise InvalidReviewError(f"tests_run[{i}] has unexpected fields: {sorted(extra)}")
         cmd, code, who = item.get("command"), item.get("exit_code"), item.get("run_by")
         if not isinstance(cmd, str):
             raise InvalidReviewError(f"tests_run[{i}].command must be a string")

@@ -79,7 +79,13 @@ class CodexAdapter:
     def parse(
         self, *, stdout: str, session_id: str | None, output_file: Path | None
     ) -> AdapterOutput:
-        thread_id = self.session_id_from_partial(stdout) or session_id
+        reported = self.session_id_from_partial(stdout)
+        if session_id and reported and reported != session_id:
+            raise InvalidReviewError(
+                f"codex returned thread {reported!r} but {session_id!r} was requested; "
+                "the saved thread was not resumed"
+            )
+        thread_id = reported or session_id
         last_message: str | None = None
         for ev in self._events(stdout):
             if ev.get("type") == "error":

@@ -156,3 +156,26 @@ def test_missing_plan_file_exit_2(fake_bin, tmp_path, capsys):
     )
     assert code == 2
     assert "nope.md" in json.loads(out)["error"]
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "inf", "nan"])
+def test_invalid_timeout_rejected(fake_bin, plan_files, tmp_path, capsys, value):
+    plan, intent = plan_files
+    with pytest.raises(SystemExit) as e:
+        main(
+            [
+                "plan",
+                "--file",
+                str(plan),
+                "--intent-file",
+                str(intent),
+                "--author",
+                "claude",
+                "--cwd",
+                str(tmp_path),
+                "--timeout",
+                value,
+            ]
+        )
+    assert e.value.code == 2
+    assert not fake_bin.exists()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -26,9 +27,19 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--response-file", type=Path, help="author response to the previous round")
     plan.add_argument("--session-id", help="existing reviewer session to resume")
     plan.add_argument("--cwd", type=Path, default=Path.cwd(), help="reviewer working directory")
-    plan.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="seconds")
+    plan.add_argument("--timeout", type=_timeout, default=DEFAULT_TIMEOUT, help="seconds (> 0)")
     plan.set_defaults(func=_cmd_plan)
     return p
+
+
+def _timeout(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"invalid timeout {text!r}") from e
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError("timeout must be a finite number greater than zero")
+    return value
 
 
 def _read(path: Path, what: str) -> str:

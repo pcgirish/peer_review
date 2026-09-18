@@ -1,6 +1,6 @@
 """Fake `claude` and `codex` executables for runner tests.
 
-Behaviour is selected with FAKE_MODE: ok | changes | bogus | garbage | error | okfail | hang.
+Behaviour is selected with FAKE_MODE: ok | changes | bogus | garbage | error | okfail | newsession | hang.
 FAKE_LOG receives one line per invocation: the JSON of {argv, env subset, child_pid}.
 """
 
@@ -17,6 +17,8 @@ FAKE_CLAUDE = textwrap.dedent(
     mode = os.environ.get("FAKE_MODE", "ok")
     argv = sys.argv[1:]
     sid = argv[argv.index("--session-id") + 1] if "--session-id" in argv else argv[argv.index("--resume") + 1]
+    if mode == "newsession":
+        sid = "replacement"
     child = None
     if mode == "hang":
         child = subprocess.Popen(["sh", "-c", "trap '' TERM; sleep 300"])
@@ -52,6 +54,8 @@ FAKE_CODEX = textwrap.dedent(
     mode = os.environ.get("FAKE_MODE", "ok")
     argv = sys.argv[1:]
     tid = argv[argv.index("resume") + 1] if "resume" in argv else "thread-new"
+    if mode == "newsession":
+        tid = "replacement"
     out = argv[argv.index("-o") + 1]
     child = None
     if mode == "hang":

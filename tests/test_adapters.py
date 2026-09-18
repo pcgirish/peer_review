@@ -190,3 +190,22 @@ def test_codex_parse_error_event(tmp_path):
     )
     with pytest.raises(InvalidReviewError, match="quota exceeded"):
         CodexAdapter().parse(stdout=stdout, session_id=None, output_file=tmp_path / "missing")
+
+
+def test_claude_parse_rejects_mismatched_session_id():
+    out = json.dumps(
+        {"type": "result", "is_error": False, "session_id": "other", "structured_output": {}}
+    )
+    with pytest.raises(InvalidReviewError, match="session"):
+        ClaudeAdapter().parse(stdout=out, session_id="sid-1", output_file=None)
+
+
+def test_codex_parse_rejects_mismatched_thread_id(tmp_path):
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "other"}),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "{}"}}),
+        ]
+    )
+    with pytest.raises(InvalidReviewError, match="thread"):
+        CodexAdapter().parse(stdout=stdout, session_id="t-1", output_file=tmp_path / "missing")

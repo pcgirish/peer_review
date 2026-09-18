@@ -131,3 +131,20 @@ def test_nonzero_exit_with_valid_output_is_error(fake_bin, tmp_path, reviewer, m
     assert out.review is None
     assert "exit" in out.error and "1" in out.error
     assert out.session_id, "session id discovered before the failure must be kept"
+
+
+@pytest.mark.parametrize("reviewer", ["claude", "codex"])
+def test_resume_with_replaced_session_is_error(fake_bin, tmp_path, reviewer, monkeypatch):
+    monkeypatch.setenv("FAKE_MODE", "newsession")
+    out = run_review(
+        reviewer,
+        prompt="P",
+        kind="plan",
+        version="v1",
+        cwd=tmp_path,
+        timeout=10,
+        session_id="saved",
+    )
+    assert out.status == "error"
+    assert out.review is None
+    assert "saved" in out.error

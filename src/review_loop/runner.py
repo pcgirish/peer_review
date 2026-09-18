@@ -130,7 +130,7 @@ def run_review(
 def _error_message(adapter, stdout: str) -> str | None:
     """Surface the reviewer's own error text (e.g. rate limit) when its output carries one."""
     try:
-        adapter.parse(stdout=stdout, session_id="unknown", output_file=None)
+        adapter.parse(stdout=stdout, session_id=None, output_file=None)
     except InvalidReviewError as e:
         return str(e)
     return None

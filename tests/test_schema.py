@@ -129,3 +129,9 @@ def test_pr_tests_run_bad_entry():
     bad = [{"command": "x", "exit_code": 0, "run_by": "ci"}]
     with pytest.raises(InvalidReviewError, match="run_by"):
         validate_review(approved(tests_run=bad), kind="pr", expected_version=VERSION)
+
+
+def test_pr_tests_run_extra_field_is_invalid():
+    bad = [{"command": "x", "exit_code": 0, "run_by": "helper", "notes": "n"}]
+    with pytest.raises(InvalidReviewError, match="tests_run\\[0\\]"):
+        validate_review(approved(tests_run=bad), kind="pr", expected_version=VERSION)

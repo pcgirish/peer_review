@@ -63,6 +63,11 @@ class ClaudeAdapter:
         sid = result.get("session_id") or session_id
         if not sid:
             raise InvalidReviewError("claude output has no session_id")
+        if session_id and sid != session_id:
+            raise InvalidReviewError(
+                f"claude returned session {sid!r} but {session_id!r} was requested; "
+                "the saved session was not resumed"
+            )
         if "structured_output" in result:
             return AdapterOutput(session_id=sid, review=result["structured_output"])
         text = result.get("result")
