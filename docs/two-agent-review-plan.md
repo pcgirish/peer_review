@@ -70,4 +70,4 @@ If plan mode blocks snapshot writes or helper execution, report the review as pe
 
 No implementation is authorized by this document. Defer detached workers, leases, crash settlement, tmux, publication, hardened isolation, context telemetry, and mandatory hooks until a demonstrated need warrants them.
 
-Skill draft: [peer-review/SKILL.md](peer-review/SKILL.md).
+Skill: [.agents/skills/peer-review/SKILL.md](../.agents/skills/peer-review/SKILL.md).
