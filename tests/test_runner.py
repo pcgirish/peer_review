@@ -189,3 +189,24 @@ def test_on_session_id_not_called_on_resume(fake_bin, tmp_path):
         on_session_id=seen.append,
     )
     assert seen == []
+
+
+def test_keyboard_interrupt_kills_reviewer_and_keeps_session_id(fake_bin, tmp_path, monkeypatch):
+    import subprocess as sp
+
+    monkeypatch.setenv("FAKE_MODE", "hang")
+    real_wait = sp.Popen.wait
+
+    def interrupt(self, timeout=None):
+        if timeout is not None:  # the runner's guarded wait
+            time.sleep(0.3)
+            raise KeyboardInterrupt
+        return real_wait(self, timeout)
+
+    monkeypatch.setattr(sp.Popen, "wait", interrupt)
+    out = run_review("codex", prompt="P", kind="plan", version="v1", cwd=tmp_path, timeout=30)
+    assert out.status == "error" and "interrupted" in out.error
+    assert out.session_id == "thread-new"
+    entry = log_entries(fake_bin)[0]
+    time.sleep(0.2)
+    assert not pid_alive(entry["child_pid"])

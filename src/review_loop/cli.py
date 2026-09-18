@@ -95,26 +95,31 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
     store, toplevel = _store(args.cwd)
     rel = _rel_path(args.file, toplevel)
 
-    if args.id:
-        state = store.move(args.id, rel) if store.load(args.id).path != rel else store.load(args.id)
-    else:
-        state = store.reserve("plan", rel)
+    # Identity first (reserve is index-locked), then the artifact lock, then a fresh
+    # load: nothing read before the lock is allowed to reach disk.
+    artifact_id = store.load(args.id).id if args.id else store.reserve("plan", rel).id
 
-    if args.intent_file:
-        state.intent = _read(args.intent_file, "intent file")
-    if args.author:
-        state.author = args.author
-        state.reviewer = reviewer_for(args.author)
-    if state.intent is None:
-        raise CliError("--intent-file is required on the first review of a plan")
-    if state.author is None or state.reviewer is None:
-        raise CliError("--author is required on the first review of a plan")
-    response = _read(args.response_file, "response file") if args.response_file else None
-    if state.reviewer_cwd is None:
-        state.reviewer_cwd = str(toplevel)
+    with store.lock(artifact_id):
+        state = store.load(artifact_id)
+        if state.path != rel:
+            if not args.id:
+                raise CliError(f"artifact {artifact_id} is at {state.path!r}, not {rel!r}")
+            state = store.move(artifact_id, rel)
 
-    with store.lock(state.id):
-        store.save(state)  # persist identity/mapping before the reviewer is contacted
+        if args.intent_file:
+            state.intent = _read(args.intent_file, "intent file")
+        if args.author:
+            state.author = args.author
+            state.reviewer = reviewer_for(args.author)
+        if state.intent is None:
+            raise CliError("--intent-file is required on the first review of a plan")
+        if state.author is None or state.reviewer is None:
+            raise CliError("--author is required on the first review of a plan")
+        response = _read(args.response_file, "response file") if args.response_file else None
+        if state.reviewer_cwd is None:
+            state.reviewer_cwd = str(toplevel)
+
+        store.save(state)
         if state.rounds >= state.limit:
             raise CliError(
                 f"round limit reached ({state.rounds}/{state.limit}) for artifact {state.id}; "
@@ -201,8 +206,8 @@ def _cmd_status(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_reset(args: argparse.Namespace) -> dict[str, Any]:
     store, _ = _store(args.cwd)
-    state = store.resolve(args.artifact)
-    with store.lock(state.id):
+    with store.lock(store.resolve(args.artifact).id):
+        state = store.load(store.resolve(args.artifact).id)
         state.reset()
         store.save(state)
     return state.to_dict()
@@ -210,8 +215,8 @@ def _cmd_reset(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_extend(args: argparse.Namespace) -> dict[str, Any]:
     store, _ = _store(args.cwd)
-    state = store.resolve(args.artifact)
-    with store.lock(state.id):
+    with store.lock(store.resolve(args.artifact).id):
+        state = store.load(store.resolve(args.artifact).id)
         if args.to <= state.limit:
             raise CliError(f"--to must exceed the current limit ({state.limit})")
         state.limit = args.to

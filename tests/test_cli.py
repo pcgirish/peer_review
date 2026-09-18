@@ -299,3 +299,88 @@ def test_invalid_timeout_rejected(fake_bin, plan_files, repo, capsys, value):
         main(plan_cmd(plan, intent, repo, "--timeout", value))
     assert e.value.code == 2
     assert not fake_bin.exists()
+
+
+def _hold_lock(store, aid):
+    store.lock_path(aid).parent.mkdir(parents=True, exist_ok=True)
+    fh = open(store.lock_path(aid), "w")  # noqa: SIM115 - held deliberately by the test
+    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fh
+
+
+def test_stale_pre_lock_state_cannot_overwrite_a_completed_update(
+    fake_bin, plan_files, repo, capsys, monkeypatch
+):
+    """State must be (re)loaded under the artifact lock, not before it."""
+    plan, intent = plan_files
+    _, out1, _ = run_cli(capsys, *plan_cmd(plan, intent, repo))
+    aid = json.loads(out1)["artifact"]
+    store = Store(repo_paths(repo).common_dir)
+
+    real_lock = Store.lock
+
+    @__import__("contextlib").contextmanager
+    def lock_then_bump(self, artifact_id):
+        # another process completes a round between this process's pre-lock work and its lock
+        other = Store(self.root.parent).load(artifact_id)
+        other.rounds = 2
+        other.history.append({"round": 2, "status": "approved"})
+        other.session_id = "newer-session"
+        Store(self.root.parent).save(other)
+        with real_lock(self, artifact_id):
+            yield
+
+    monkeypatch.setattr(Store, "lock", lock_then_bump)
+    code, out, _ = run_cli(capsys, *plan_cmd(plan, None, repo, author=None))
+    assert code in (0, 1)
+    final = store.load(aid)
+    assert final.rounds == 3 and len(final.history) == 3
+    assert json.loads(out)["session_id"] == "newer-session"
+
+
+def test_move_is_rejected_unchanged_while_artifact_is_locked(fake_bin, plan_files, repo, capsys):
+    plan, intent = plan_files
+    _, out1, _ = run_cli(capsys, *plan_cmd(plan, intent, repo))
+    aid = json.loads(out1)["artifact"]
+    store = Store(repo_paths(repo).common_dir)
+    before_state = store.load(aid).to_dict()
+    before_index = store.index_path.read_text()
+    moved = repo / "docs" / "renamed.md"
+    plan.rename(moved)
+    fh = _hold_lock(store, aid)
+    try:
+        code, out, _ = run_cli(capsys, *plan_cmd(moved, None, repo, "--id", aid, author=None))
+    finally:
+        fh.close()
+    assert code == 2 and "locked" in json.loads(out)["error"]
+    assert store.load(aid).to_dict() == before_state
+    assert store.index_path.read_text() == before_index
+
+
+@pytest.mark.parametrize("cmd", ["reset", "extend"])
+def test_reset_and_extend_reload_under_lock(fake_bin, plan_files, repo, capsys, monkeypatch, cmd):
+    plan, intent = plan_files
+    _, out1, _ = run_cli(capsys, *plan_cmd(plan, intent, repo))
+    aid = json.loads(out1)["artifact"]
+    store = Store(repo_paths(repo).common_dir)
+    real_lock = Store.lock
+
+    @__import__("contextlib").contextmanager
+    def lock_then_bump(self, artifact_id):
+        other = Store(self.root.parent).load(artifact_id)
+        other.history.append({"round": 2, "status": "approved"})
+        other.rounds = 2
+        Store(self.root.parent).save(other)
+        with real_lock(self, artifact_id):
+            yield
+
+    monkeypatch.setattr(Store, "lock", lock_then_bump)
+    extra = ["--to", "5"] if cmd == "extend" else []
+    code, _, _ = run_cli(capsys, cmd, aid, "--cwd", str(repo), *extra)
+    assert code == 0
+    final = store.load(aid)
+    assert len(final.history) == 2
+    if cmd == "extend":
+        assert final.rounds == 2 and final.limit == 5
+    else:
+        assert final.rounds == 0

@@ -159,6 +159,12 @@ class Store:
             self._write_index(index)
 
     def move(self, artifact_id: str, new_path: str) -> ArtifactState:
+        """Re-map an artifact to a new path. Callers hold the artifact lock; the index
+        lock is taken here so the shared mapping cannot interleave with a reservation."""
+        with self.lock_index():
+            return self._move(artifact_id, new_path)
+
+    def _move(self, artifact_id: str, new_path: str) -> ArtifactState:
         state = self.load(artifact_id)
         index = self._index()
         owner = index.get(self._key(state.kind, new_path))
