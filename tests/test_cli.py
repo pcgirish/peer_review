@@ -679,3 +679,25 @@ def test_pr_history_records_the_helper_test_run(fake_pr, pr_env, capsys):
     state = Store(repo_paths(fake_pr.repo).common_dir).load(r["artifact"])
     tests = state.history[0]["tests"]
     assert tests == [{"command": "exit 3", "exit_code": 3, "output": "", "run_by": "helper"}]
+
+
+def test_pr_timeout_is_one_deadline_for_tests_and_reviewer(fake_pr, pr_env, capsys, monkeypatch):
+    import review_loop.cli as cli_mod
+
+    seen = {}
+    real = cli_mod.run_review
+
+    def spy(*a, **kw):
+        seen["timeout"] = kw["timeout"]
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cli_mod, "run_review", spy)
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--timeout", "10", test_command="sleep 1"))
+    assert code == 0 and json.loads(out)["status"] == "approved"
+    assert 0 < seen["timeout"] <= 9.0
+
+
+def test_pr_tests_exhausting_the_timeout_skip_the_reviewer(fake_pr, pr_env, capsys, fake_bin):
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--timeout", "1", test_command="sleep 5"))
+    assert code == 2 and "tests exhausted the round's timeout" in out
+    assert not fake_bin.exists()  # no reviewer was spawned

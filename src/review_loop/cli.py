@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -217,6 +218,8 @@ def _apply_inputs(
 
 
 def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
+    # --timeout is one deadline for the whole round: helper tests + reviewer call
+    deadline = time.monotonic() + args.timeout
     store, toplevel = _store(args.cwd)
     artifact_id = store.reserve("pr", str(args.number)).id
     with store.lock(artifact_id):
@@ -228,8 +231,15 @@ def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
         worktree = checkout_revision(
             pr.number, pr.head_sha, dest=store.worktree_dir(state.id), cwd=toplevel
         )
-        test_output = run_tests(state.test_command, cwd=worktree, timeout=args.timeout)
+        test_output = run_tests(
+            state.test_command, cwd=worktree, timeout=max(deadline - time.monotonic(), 0.0)
+        )
         tests = [test_output.to_prompt_dict()]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CliError(
+                f"tests exhausted the round's timeout ({args.timeout:g}s); reviewer not started"
+            )
         # tests may write into the worktree; the reviewer must see the PR head, nothing else
         restore_worktree(worktree, pr.head_sha)
         diff = pr_diff(pr.number, cwd=toplevel)
@@ -263,7 +273,7 @@ def _cmd_pr(args: argparse.Namespace) -> dict[str, Any]:
             version=version,
             cwd=Path(state.reviewer_cwd),
             session_id=state.session_id,
-            timeout=args.timeout,
+            timeout=remaining,
             on_session_id=lambda sid: _persist_session(store, state, sid),
         )
         outcome = _pr_stale_check(outcome, args, state, pr.head_sha, version, toplevel)
