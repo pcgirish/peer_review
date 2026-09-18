@@ -65,7 +65,7 @@ If plan mode blocks snapshot writes or helper execution, report the review as pe
 | 2. One review call | Implement both adapters, helper-owned prompt, JSON validation, recursion guard, and timeout cleanup. Test both directions and failure responses. |
 | 3. Preserve sessions | Add artifact identities, state, OS locks, and status/reset/extend. Test known-path reuse, explicit file moves, wrapper restart, linked worktrees, overlap rejection, interrupted calls, and session loss. |
 | 4. Complete plan loop | Add snapshots, intent/responses, version checks, and round limits. Verify revision review stays in the same session and stale inputs never approve. |
-| 5. Add PR loop | Accept PR number and intent; retrieve context automatically. Verify head movement becomes stale, base-only movement does not, and pushed revisions reuse the same session. |
+| 5. Add PR loop | Accept PR number and intent; retrieve context automatically. Verify head movement becomes stale, base-only movement does not, and pushed revisions reuse the same session. Opt-in `--post-comment`: the helper (never the reviewer) posts each validated verdict as a plain PR comment labelled with reviewer, version, and round; the skill asks the author to reply on the PR with its response before pushing a revision. No GitHub review or approval is ever submitted. |
 | 6. Integrate skills | Install the shared skill for both CLIs. Try a real plan and PR in each author direction; verify fixes, disagreement handling, and stopping at the limit. |
 
 No implementation is authorized by this document. Defer detached workers, leases, crash settlement, tmux, publication, hardened isolation, context telemetry, and mandatory hooks until a demonstrated need warrants them.
