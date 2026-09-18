@@ -34,13 +34,13 @@ Codex `exec` blocks reading stdin if it is left open. The helper must pass `stdi
 | Enforcement level | Tool removed from the model; **Bash is not sandboxed**, so shell writes remain possible unless Bash is also disallowed | OS-level (seatbelt). `touch` in the repo, `open()` in `/tmp`, `mkdir __pycache__`, and `tempfile.mkdtemp()` all fail with `Operation not permitted` |
 | Verified | "I don't have a Write tool"; file absent | File absent; PermissionError captured |
 
-Limitation: a **read-only Codex reviewer cannot run tests** — pytest needs a writable tmp and cache. Options, to decide before Step 2:
+Observed limitation: under `--sandbox read-only`, writes to the repo, `/tmp`, and Python's default temp dirs all fail. Test runners that need a writable temp or cache directory (pytest by default) therefore cannot run. Options, to decide before Step 2:
 
-1. Reviewer stays read-only; the helper runs the project test command itself and passes the output into the reviewer prompt. `tests_run` then describes helper-run tests. Simplest; matches "reviewer does not edit author files".
+1. **Chosen.** Reviewer stays read-only; the helper runs the project test command itself and passes the output into the reviewer prompt. `tests_run` entries carry `run_by: helper`. Simplest; matches "reviewer does not edit author files".
 2. Codex reviewer uses `--sandbox workspace-write`; it can then edit the author's checkout. Prompt-only restraint.
 3. Codex reviewer uses `--worktree` (managed git worktree) with `workspace-write`. Isolates writes; adds a per-session worktree to keep stable.
 
-Neither CLI sandboxes network or `gh`; shared GitHub credentials are not made read-only by any of the above.
+Network access was not probed. Regardless of sandbox mode, `gh` uses the user's stored GitHub credentials, so none of the above makes those credentials read-only.
 
 ## Recursion guard
 
