@@ -55,6 +55,16 @@ def repo_paths(cwd: Path) -> RepoPaths:
     return RepoPaths(toplevel, common.resolve())
 
 
+def repo_head(cwd: Path) -> str | None:
+    """Current HEAD, recorded as review context only (never part of a plan version)."""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
 @dataclass
 class ArtifactState:
     id: str
@@ -103,6 +113,17 @@ class Store:
 
     def lock_path(self, artifact_id: str) -> Path:
         return self.locks / f"{artifact_id}.lock"
+
+    def snapshot_dir(self, artifact_id: str) -> Path:
+        return self.root / "snapshots" / artifact_id
+
+    def write_snapshot(self, artifact_id: str, version: str, files: dict[str, str]) -> Path:
+        """Freeze the reviewed inputs under snapshots/<id>/<version>/ and return that dir."""
+        d = self.snapshot_dir(artifact_id) / version
+        d.mkdir(parents=True, exist_ok=True)
+        for name, text in files.items():
+            (d / name).write_text(text, encoding="utf-8")
+        return d
 
     # --- index ---------------------------------------------------------------
     @staticmethod

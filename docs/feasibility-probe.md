@@ -91,3 +91,15 @@ Both reviewers honoured the schema (Claude via `structured_output`, Codex via th
 | `review-loop status <path>` | shows both rounds, the session id, and the per-round findings |
 
 Codex's round-2 findings were verified and fixed before the PR: (a) two concurrent first calls on an unknown path could each invent an id before any lock — path lookup/creation now happens under an index lock (`Store.reserve`); (b) a first call interrupted mid-review never persisted its thread id — the runner now streams stdout and reports the session id via `on_session_id` as soon as it appears (Claude: before spawn), and the CLI saves it immediately; Ctrl-C terminates the reviewer tree and keeps the id.
+
+## Step 4 — snapshots and stale checks, live results
+
+Each review freezes the plan and intent under `.git/review-loop/snapshots/<id>/<version>/` and the prompt points the reviewer at that frozen copy. After the reviewer returns, the helper re-hashes the live file and intent; a different version discards the verdict as `stale` (exit 3), which consumes no round and keeps the session. Repository HEAD is recorded per round as context only. Live on 2026-09-18 with Codex as reviewer:
+
+| Call | Result |
+|---|---|
+| Round 1, plan file appended to 8 s into the review | `stale` ("plan file changed during review; verdict discarded"), 64.5 s, round 0, thread id saved |
+| Re-run unchanged, no flags | `changes_requested`, 3 findings, 27.8 s, resumed in the same thread, round 1/3 |
+| `status` | history shows both entries with their snapshot dirs and HEAD |
+
+Exit codes: 0 approved, 1 changes requested, 2 error, 3 stale.

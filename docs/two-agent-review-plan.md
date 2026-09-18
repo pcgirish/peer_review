@@ -1,6 +1,6 @@
 # Two-Agent Peer Review — Minimal Plan
 
-Status: Steps 1–3 done (see [feasibility-probe.md](feasibility-probe.md)). `review-loop plan` reviews a plan with either reviewer and keeps one reviewer session per artifact in state under the Git common dir, with per-artifact OS locks, a 3-round limit, and `status`/`reset`/`extend`. Snapshots and stale checks (Step 4), the PR loop (5), and skill installation (6) are not built.
+Status: Steps 1–4 done (see [feasibility-probe.md](feasibility-probe.md)). `review-loop plan` reviews a frozen snapshot of the plan and intent with either reviewer, keeps one reviewer session per artifact in state under the Git common dir (per-artifact OS locks, 3-round limit, `status`/`reset`/`extend`), and reports `stale` (exit 3, no round consumed) when the plan or intent changed during the review. The PR loop (5) and skill installation (6) are not built.
 
 ## Goal and Boundary
 
