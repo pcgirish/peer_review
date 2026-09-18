@@ -121,3 +121,13 @@ def test_missing_executable_is_error(fake_bin, tmp_path, monkeypatch):
     out = run_review("codex", prompt="P", kind="plan", version="v1", cwd=tmp_path, timeout=5)
     assert out.status == "error"
     assert "codex" in out.error
+
+
+@pytest.mark.parametrize("reviewer", ["claude", "codex"])
+def test_nonzero_exit_with_valid_output_is_error(fake_bin, tmp_path, reviewer, monkeypatch):
+    monkeypatch.setenv("FAKE_MODE", "okfail")
+    out = run_review(reviewer, prompt="P", kind="plan", version="v1", cwd=tmp_path, timeout=10)
+    assert out.status == "error"
+    assert out.review is None
+    assert "exit" in out.error and "1" in out.error
+    assert out.session_id, "session id discovered before the failure must be kept"

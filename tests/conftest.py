@@ -1,6 +1,6 @@
 """Fake `claude` and `codex` executables for runner tests.
 
-Behaviour is selected with FAKE_MODE: ok | changes | garbage | error | hang | env.
+Behaviour is selected with FAKE_MODE: ok | changes | bogus | garbage | error | okfail | hang.
 FAKE_LOG receives one line per invocation: the JSON of {argv, env subset, child_pid}.
 """
 
@@ -19,7 +19,7 @@ FAKE_CLAUDE = textwrap.dedent(
     sid = argv[argv.index("--session-id") + 1] if "--session-id" in argv else argv[argv.index("--resume") + 1]
     child = None
     if mode == "hang":
-        child = subprocess.Popen(["sleep", "300"])
+        child = subprocess.Popen(["sh", "-c", "trap '' TERM; sleep 300"])
     with open(os.environ["FAKE_LOG"], "a") as f:
         f.write(json.dumps({"argv": argv, "reviewer": os.environ.get("REVIEW_LOOP_REVIEWER"),
                             "child_pid": child.pid if child else None, "cwd": os.getcwd()}) + "\\n")
@@ -40,6 +40,8 @@ FAKE_CLAUDE = textwrap.dedent(
     if os.environ.get("FAKE_PR"):
         so["tests_run"] = [{"command": "uv run pytest", "exit_code": 0, "run_by": "helper"}]
     print(json.dumps({"type": "result", "is_error": False, "session_id": sid, "structured_output": so}))
+    if mode == "okfail":
+        sys.exit(1)
     """
 )
 
@@ -53,7 +55,7 @@ FAKE_CODEX = textwrap.dedent(
     out = argv[argv.index("-o") + 1]
     child = None
     if mode == "hang":
-        child = subprocess.Popen(["sleep", "300"])
+        child = subprocess.Popen(["sh", "-c", "trap '' TERM; sleep 300"])
     with open(os.environ["FAKE_LOG"], "a") as f:
         f.write(json.dumps({"argv": argv, "reviewer": os.environ.get("REVIEW_LOOP_REVIEWER"),
                             "child_pid": child.pid if child else None, "cwd": os.getcwd()}) + "\\n")
@@ -78,6 +80,8 @@ FAKE_CODEX = textwrap.dedent(
         json.dump(so, f)
     print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(so)}}))
     print(json.dumps({"type": "turn.completed", "usage": {}}))
+    if mode == "okfail":
+        sys.exit(1)
     """
 )
 

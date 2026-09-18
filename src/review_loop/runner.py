@@ -106,17 +106,17 @@ def run_review(
             stdout, stderr = proc.communicate()
             sid = adapter.session_id_from_partial(stdout) or session_id
             return _outcome(reviewer, sid, None, f"reviewer timed out after {timeout:g}s", started)
+        detail = f" (exit {proc.returncode}; stderr: {stderr.strip()[:300]!r})"
+        if proc.returncode != 0:
+            sid = adapter.session_id_from_partial(stdout) or session_id
+            msg = _error_message(adapter, stdout) or "reviewer exited with a nonzero status"
+            return _outcome(reviewer, sid, None, f"{msg}{detail}", started)
         try:
             parsed = adapter.parse(
                 stdout=stdout, session_id=session_id, output_file=inv.output_file
             )
         except InvalidReviewError as e:
             sid = adapter.session_id_from_partial(stdout) or session_id
-            detail = (
-                f" (exit {proc.returncode}; stderr: {stderr.strip()[:300]!r})"
-                if stderr.strip()
-                else ""
-            )
             return _outcome(reviewer, sid, None, f"{e}{detail}", started)
         try:
             review = validate_review(parsed.review, kind=kind, expected_version=version)
@@ -127,6 +127,15 @@ def run_review(
         _cleanup(inv.temp_files)
 
 
+def _error_message(adapter, stdout: str) -> str | None:
+    """Surface the reviewer's own error text (e.g. rate limit) when its output carries one."""
+    try:
+        adapter.parse(stdout=stdout, session_id="unknown", output_file=None)
+    except InvalidReviewError as e:
+        return str(e)
+    return None
+
+
 def _outcome(
     reviewer: str, sid: str | None, review: ReviewResult | None, error: str | None, started: float
 ) -> ReviewOutcome:
@@ -135,21 +144,27 @@ def _outcome(
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
-    """Terminate the reviewer's whole process group, escalating to SIGKILL."""
+    """Terminate the reviewer's whole process group.
+
+    SIGTERM first, then SIGKILL to the group unconditionally: a descendant that
+    ignores SIGTERM would otherwise keep the stdout/stderr pipes open and hang
+    the following `communicate()`.
+    """
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
         return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(pgid, sig)
-        except ProcessLookupError:
-            return
-        deadline = time.monotonic() + _KILL_GRACE
-        while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                return
-            time.sleep(0.05)
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + _KILL_GRACE
+    while time.monotonic() < deadline and proc.poll() is None:
+        time.sleep(0.05)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def _cleanup(paths: list[Path]) -> None:
