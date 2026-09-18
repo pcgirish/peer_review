@@ -69,8 +69,10 @@ def review_schema(kind: Kind) -> dict[str, Any]:
                 "additionalProperties": False,
             },
         }
-        properties["tests_not_run_reason"] = {"type": "string"}
-        required.append("tests_run")
+        # Strict structured output (Codex) requires every property to be listed in
+        # `required`; the optional reason is therefore nullable rather than omittable.
+        properties["tests_not_run_reason"] = {"type": ["string", "null"]}
+        required += ["tests_run", "tests_not_run_reason"]
     return {
         "type": "object",
         "properties": properties,

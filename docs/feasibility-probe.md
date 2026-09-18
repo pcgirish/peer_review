@@ -103,3 +103,17 @@ Each review freezes the plan and intent under `.git/review-loop/snapshots/<id>/<
 | `status` | history shows both entries with their snapshot dirs and HEAD |
 
 Exit codes: 0 approved, 1 changes requested, 2 error, 3 stale.
+
+## Step 5 — PR loop, live results
+
+`review-loop pr <number>` takes the PR number and intent; title, body, diff and head/base SHAs come from `gh`. The head revision is fetched from `refs/pull/<n>/head`, checked against the SHA `gh` reported, and checked out detached under `.git/review-loop/worktrees/<id>`; the helper runs the saved `--test-command` there, restores the worktree, and puts the output in the prompt. Version = `<head sha>+<intent hash>`. Live on 2026-09-18 against this repository's PR #8 (the Step 5 branch itself) with Codex as reviewer and `--post-comment`:
+
+| Call | Result |
+|---|---|
+| Round 1, first attempt | `error` in 2.7 s: Codex rejected the output schema (`required` must list every property). Real bug, fixed and pushed. |
+| Re-run right after the push | `stale` (exit 3): `gh pr view` still returned the old head, the post-review check saw the new one. No round consumed, session kept. |
+| Re-run | `changes_requested`, 3 findings (test command optional, intent not re-checked, tests dirtied the worktree). All valid, fixed. Comment posted by the helper. |
+| Round 2 with `--response-file` | `changes_requested`, 1 finding (failed post-review `gh` lookup reported as stale instead of error). Fixed. |
+| Round 3 with `--response-file` | `approved`, 27.4 s, round 3/3, same Codex thread since the first call. |
+
+The loop found four real defects in its own implementation before a human review. Comments are plain issue comments labelled with reviewer, version, round and verdict; no GitHub review or approval is submitted. Known limitation: the PR head is fetched from the remote named `origin`.

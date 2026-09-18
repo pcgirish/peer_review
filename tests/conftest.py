@@ -4,6 +4,7 @@ Behaviour is selected with FAKE_MODE: ok | changes | bogus | garbage | error | o
 FAKE_LOG receives one line per invocation: the JSON of {argv, env subset, child_pid}.
 """
 
+import json
 import os
 import stat
 import textwrap
@@ -90,17 +91,44 @@ FAKE_CODEX = textwrap.dedent(
 )
 
 
+FAKE_GH = textwrap.dedent(
+    """\
+    #!/usr/bin/env python3
+    import json, os, sys
+    state = json.load(open(os.environ["FAKE_GH_STATE"]))
+    argv = sys.argv[1:]
+    with open(os.environ["FAKE_GH_LOG"], "a") as f:
+        f.write(json.dumps({"argv": argv}) + "\\n")
+    if state.get("fail"):
+        print("gh: HTTP 502", file=sys.stderr); sys.exit(1)
+    if argv[:2] == ["pr", "view"]:
+        fields = argv[argv.index("--json") + 1].split(",")
+        print(json.dumps({k: state["pr"][k] for k in fields})); sys.exit(0)
+    if argv[:2] == ["pr", "diff"]:
+        print(state["diff"], end=""); sys.exit(0)
+    if argv[:2] == ["pr", "comment"]:
+        body = open(argv[argv.index("--body-file") + 1]).read()
+        with open(os.environ["FAKE_GH_LOG"], "a") as f:
+            f.write(json.dumps({"comment": body, "number": argv[2]}) + "\\n")
+        print("https://github.com/o/r/pull/%s#issuecomment-1" % argv[2]); sys.exit(0)
+    print("fake gh: unsupported", argv, file=sys.stderr); sys.exit(2)
+    """
+)
+
+
 @pytest.fixture
 def fake_bin(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    for name, body in (("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX)):
+    for name, body in (("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("gh", FAKE_GH)):
         p = bindir / name
         p.write_text(body)
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "fake.log"
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_LOG", str(log))
+    monkeypatch.setenv("FAKE_GH_LOG", str(tmp_path / "gh.log"))
+    monkeypatch.setenv("FAKE_GH_STATE", str(tmp_path / "gh-state.json"))
     monkeypatch.delenv("REVIEW_LOOP_REVIEWER", raising=False)
     monkeypatch.delenv("FAKE_MODE", raising=False)
     monkeypatch.delenv("FAKE_PR", raising=False)
@@ -127,3 +155,54 @@ def repo(tmp_path):
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "init")
     return root
+
+
+class FakePr:
+    """A repo with a bare origin holding refs/pull/<n>/head, plus the fake gh's state file."""
+
+    def __init__(self, repo, origin, number, state_path, gh_log):
+        self.repo, self.origin, self.number = repo, origin, number
+        self.state_path, self.gh_log = state_path, gh_log
+        self.base_sha = _git(repo, "rev-parse", "HEAD")
+        self.head_sha = self.push_revision("feature work")
+        self.diff = "diff --git a/f.py b/f.py\n+print('hi')\n"
+        self.write_state()
+
+    def push_revision(self, msg):
+        """Commit on top of the current PR head (detached) and publish it as refs/pull/n/head."""
+        (self.repo / "f.py").write_text(f"# {msg}\n")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", msg)
+        sha = _git(self.repo, "rev-parse", "HEAD")
+        _git(self.repo, "push", "-q", "origin", f"HEAD:refs/pull/{self.number}/head")
+        self.head_sha = sha
+        return sha
+
+    def write_state(self, **overrides):
+        pr = {
+            "number": self.number,
+            "url": f"https://github.com/o/r/pull/{self.number}",
+            "title": "Add f",
+            "body": "Adds f.py",
+            "headRefOid": self.head_sha,
+            "baseRefOid": self.base_sha,
+            "baseRefName": "main",
+            "headRefName": "feature",
+        }
+        pr.update(overrides.pop("pr", {}))
+        state = {"pr": pr, "diff": self.diff, **overrides}
+        self.state_path.write_text(json.dumps(state))
+
+    def gh_calls(self):
+        if not self.gh_log.exists():
+            return []
+        return [json.loads(line) for line in self.gh_log.read_text().splitlines()]
+
+
+@pytest.fixture
+def fake_pr(fake_bin, repo, tmp_path):
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(origin))
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "-q", "origin", "main")
+    return FakePr(repo, origin, 7, tmp_path / "gh-state.json", tmp_path / "gh.log")

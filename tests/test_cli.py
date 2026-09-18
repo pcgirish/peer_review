@@ -1,6 +1,7 @@
 import fcntl
 import json
 import subprocess
+import time
 
 import pytest
 
@@ -499,3 +500,222 @@ def test_stale_result_does_not_retry_and_next_call_resumes(
 
 def test_git_helper_in_cli_tests(repo):
     assert len(_git(repo, "rev-parse", "HEAD")) == 40
+
+
+# --- Step 5: PR loop -------------------------------------------------------------
+
+
+def pr_cmd(fake_pr, *extra, intent=True, author="claude", test_command="true"):
+    args = ["pr", "7", "--cwd", str(fake_pr.repo), "--timeout", "10"]
+    if intent:
+        i = fake_pr.repo / "intent.md"
+        i.write_text("Add f.")
+        args += ["--intent-file", str(i)]
+    if author:
+        args += ["--author", author]
+    if test_command:
+        args += ["--test-command", test_command]
+    return args + list(extra)
+
+
+@pytest.fixture
+def pr_env(monkeypatch):
+    monkeypatch.setenv("FAKE_PR", "1")  # fake reviewers include tests_run
+
+
+@pytest.mark.parametrize("author,reviewer", [("claude", "codex"), ("codex", "claude")])
+def test_pr_review_reviews_the_fetched_head(fake_pr, pr_env, capsys, fake_bin, author, reviewer):
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, author=author))
+    r = json.loads(out)
+    assert code == 0 and r["status"] == "approved" and r["reviewer"] == reviewer
+    assert r["pr"] == 7 and r["version"].startswith(fake_pr.head_sha + "+")
+    store = Store(repo_paths(fake_pr.repo).common_dir)
+    st = store.load(r["artifact"])
+    assert st.kind == "pr" and st.path == "7" and st.rounds == 1
+    h = st.history[0]
+    assert h["pr_head"] == fake_pr.head_sha and h["pr_base"] == fake_pr.base_sha
+    prompt = log_entries(fake_bin)[0]["argv"][-1]
+    assert "diff --git a/f.py" in prompt and fake_pr.head_sha in prompt
+    wt = store.worktree_dir(r["artifact"])
+    assert str(wt) in prompt and _git(wt, "rev-parse", "HEAD") == fake_pr.head_sha
+    assert "### `true` — exit code 0" in prompt
+
+
+def test_pr_test_command_runs_in_the_pr_worktree_and_is_saved(fake_pr, pr_env, capsys, fake_bin):
+    cmd = "cat f.py && pwd"
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--test-command", cmd))
+    r = json.loads(out)
+    assert code == 0
+    prompt = log_entries(fake_bin)[0]["argv"][-1]
+    wt = Store(repo_paths(fake_pr.repo).common_dir).worktree_dir(r["artifact"])
+    assert "No tests were run by the helper" not in prompt
+    assert f"### `{cmd}` — exit code 0" in prompt and "# feature work" in prompt
+    assert str(wt.resolve()) in prompt
+    # second call reuses the saved command
+    run_cli(capsys, *pr_cmd(fake_pr, intent=False, author=None, test_command=None))
+    assert f"### `{cmd}`" in log_entries(fake_bin)[1]["argv"][-1]
+
+
+def test_pr_head_moved_during_review_is_stale(fake_pr, pr_env, capsys, monkeypatch):
+    _mutate_during_review(monkeypatch, lambda: fake_pr.write_state(pr={"headRefOid": "b" * 40}))
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    r = json.loads(out)
+    assert code == 3 and r["status"] == "stale" and r["round"] == 0
+    assert "PR head moved during review" in r["error"]
+
+
+def test_pr_base_moved_during_review_is_not_stale(fake_pr, pr_env, capsys, monkeypatch):
+    _mutate_during_review(monkeypatch, lambda: fake_pr.write_state(pr={"baseRefOid": "c" * 40}))
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    assert code == 0 and json.loads(out)["status"] == "approved"
+
+
+def test_pr_pushed_revision_reuses_session_and_reviews_new_head(fake_pr, pr_env, capsys, fake_bin):
+    _, out1, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    r1 = json.loads(out1)
+    new = fake_pr.push_revision("address review")
+    fake_pr.write_state()
+    resp = fake_pr.repo / "resp.md"
+    resp.write_text("Done.")
+    code, out2, _ = run_cli(
+        capsys, *pr_cmd(fake_pr, "--response-file", str(resp), intent=False, author=None)
+    )
+    r2 = json.loads(out2)
+    assert code == 0 and r2["artifact"] == r1["artifact"] and r2["round"] == 2
+    assert r2["session_id"] == r1["session_id"] and r2["version"].startswith(new + "+")
+    assert "resume" in log_entries(fake_bin)[1]["argv"]
+    wt = Store(repo_paths(fake_pr.repo).common_dir).worktree_dir(r1["artifact"])
+    assert _git(wt, "rev-parse", "HEAD") == new
+
+
+def test_pr_gh_and_head_disagree_is_error(fake_pr, pr_env, capsys):
+    fake_pr.write_state(pr={"headRefOid": "d" * 40})
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    assert code == 2 and "is not the head of refs/pull/7/head" in json.loads(out)["error"]
+
+
+def test_pr_post_comment_is_opt_in_and_posted_by_the_helper(fake_pr, pr_env, capsys, monkeypatch):
+    monkeypatch.setenv("FAKE_MODE", "changes")
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    assert code == 1 and "comment" not in json.loads(out)
+    assert not [c for c in fake_pr.gh_calls() if "comment" in c]
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--post-comment", intent=False, author=None))
+    r = json.loads(out)
+    assert code == 1 and r["comment"].endswith("#issuecomment-1")
+    posted = [c for c in fake_pr.gh_calls() if "comment" in c]
+    assert len(posted) == 1
+    body = posted[0]["comment"]
+    assert "review-loop" in body and "codex" in body and r["version"] in body
+    assert "round 2/3" in body and "changes_requested" in body
+    assert "reply on this PR" in body
+    st = Store(repo_paths(fake_pr.repo).common_dir).load(r["artifact"])
+    assert st.history[1]["comment"] == r["comment"]
+
+
+def test_pr_post_comment_failure_keeps_verdict(fake_pr, pr_env, capsys, monkeypatch):
+    import review_loop.cli as cli_mod
+
+    def boom(*a, **kw):
+        raise cli_mod.GitHubError("gh: rate limited")
+
+    monkeypatch.setattr(cli_mod, "post_comment", boom)
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--post-comment"))
+    r = json.loads(out)
+    assert code == 0 and r["status"] == "approved" and "rate limited" in r["comment_error"]
+
+
+def test_pr_post_comment_not_sent_for_error_or_stale(fake_pr, pr_env, capsys, monkeypatch):
+    monkeypatch.setenv("FAKE_MODE", "garbage")
+    code, _, _ = run_cli(capsys, *pr_cmd(fake_pr, "--post-comment"))
+    assert code == 2
+    assert not [c for c in fake_pr.gh_calls() if "comment" in c]
+
+
+def test_pr_status_by_number(fake_pr, pr_env, capsys):
+    _, out1, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    code, out, _ = run_cli(capsys, "status", "7", "--cwd", str(fake_pr.repo))
+    assert code == 0 and json.loads(out)["id"] == json.loads(out1)["artifact"]
+
+
+def test_pr_first_review_requires_a_test_command(fake_pr, pr_env, capsys, fake_bin):
+    # the plan's contract: the helper runs the project tests before every PR review
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, test_command=None))
+    assert code == 2 and "--test-command is required on the first review of a PR" in out
+    assert not fake_bin.exists()  # no reviewer was spawned
+
+
+def test_pr_intent_changed_during_review_is_stale(fake_pr, pr_env, capsys, monkeypatch):
+    intent = fake_pr.repo / "intent.md"
+    _mutate_during_review(monkeypatch, lambda: intent.write_text("Add f, differently."))
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    r = json.loads(out)
+    assert code == 3 and r["status"] == "stale" and r["round"] == 0
+    assert "intent changed during review" in r["error"]
+
+
+def test_pr_worktree_is_restored_to_the_head_after_tests(fake_pr, pr_env, capsys, fake_bin):
+    cmd = "echo dirty >> f.py && echo junk > junk.txt"
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--test-command", cmd))
+    r = json.loads(out)
+    assert code == 0
+    wt = Store(repo_paths(fake_pr.repo).common_dir).worktree_dir(r["artifact"])
+    assert (wt / "f.py").read_text() == "# feature work\n"
+    assert not (wt / "junk.txt").exists()
+    assert _git(wt, "status", "--porcelain") == ""
+
+
+def test_pr_head_recheck_failure_is_an_error_not_stale(fake_pr, pr_env, capsys, monkeypatch):
+    _mutate_during_review(monkeypatch, lambda: fake_pr.write_state(fail=True))
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr))
+    r = json.loads(out)
+    assert code == 2 and r["status"] == "error" and r["round"] == 0
+    assert "could not verify the PR head after the review" in r["error"]
+    assert "HTTP 502" in r["error"]
+
+
+def test_pr_history_records_the_helper_test_run(fake_pr, pr_env, capsys):
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, test_command="exit 3"))
+    r = json.loads(out)
+    assert code == 0
+    state = Store(repo_paths(fake_pr.repo).common_dir).load(r["artifact"])
+    tests = state.history[0]["tests"]
+    assert tests == [{"command": "exit 3", "exit_code": 3, "output": "", "run_by": "helper"}]
+
+
+def test_pr_timeout_is_one_deadline_for_tests_and_reviewer(fake_pr, pr_env, capsys, monkeypatch):
+    import review_loop.cli as cli_mod
+
+    seen = {}
+    real = cli_mod.run_review
+
+    def spy(*a, **kw):
+        seen["timeout"] = kw["timeout"]
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cli_mod, "run_review", spy)
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--timeout", "10", test_command="sleep 1"))
+    assert code == 0 and json.loads(out)["status"] == "approved"
+    assert 0 < seen["timeout"] <= 9.0
+
+
+def test_pr_tests_exhausting_the_timeout_skip_the_reviewer(fake_pr, pr_env, capsys, fake_bin):
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--timeout", "1", test_command="sleep 5"))
+    assert code == 2 and "tests exhausted the round's timeout" in out
+    assert not fake_bin.exists()  # no reviewer was spawned
+
+
+def test_pr_budget_spent_after_tests_still_skips_the_reviewer(
+    fake_pr, pr_env, capsys, fake_bin, monkeypatch
+):
+    import review_loop.cli as cli_mod
+
+    real = cli_mod.pr_diff
+
+    def slow_diff(*a, **kw):
+        time.sleep(1.5)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cli_mod, "pr_diff", slow_diff)
+    code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--timeout", "1", test_command="true"))
+    assert code == 2 and "exhausted the round's timeout" in out
+    assert not fake_bin.exists()  # no reviewer was spawned

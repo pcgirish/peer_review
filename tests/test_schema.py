@@ -135,3 +135,25 @@ def test_pr_tests_run_extra_field_is_invalid():
     bad = [{"command": "x", "exit_code": 0, "run_by": "helper", "notes": "n"}]
     with pytest.raises(InvalidReviewError, match="tests_run\\[0\\]"):
         validate_review(approved(tests_run=bad), kind="pr", expected_version=VERSION)
+
+
+def test_schema_lists_every_property_as_required():
+    # OpenAI strict structured output rejects a schema whose `required` omits a property
+    # (live failure: "Missing 'tests_not_run_reason'"). Optional fields are nullable instead.
+    for kind in ("plan", "pr"):
+        s = review_schema(kind)
+        assert sorted(s["required"]) == sorted(s["properties"])
+    assert review_schema("pr")["properties"]["tests_not_run_reason"]["type"] == ["string", "null"]
+
+
+def test_pr_accepts_explicit_null_reason():
+    obj = approved(
+        tests_run=[{"command": "uv run pytest", "exit_code": 0, "run_by": "helper"}],
+        tests_not_run_reason=None,
+    )
+    r = validate_review(obj, kind="pr", expected_version=VERSION)
+    assert r.tests_not_run_reason is None
+    with pytest.raises(InvalidReviewError, match="tests_not_run_reason"):
+        validate_review(
+            approved(tests_run=[], tests_not_run_reason=None), kind="pr", expected_version=VERSION
+        )
