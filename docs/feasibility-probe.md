@@ -64,7 +64,18 @@ Claude: `--permission-mode plan` exists. In plan mode the host blocks writes out
 
 Each `claude -p` call re-sends ~14–30 k cached tokens; a resumed session costs ~$0.004 when the cache is warm and ~$0.06 when cold. Codex calls reported 17–59 k input tokens. Not a blocker; noted for round limits.
 
-## Decisions needed before Step 2
+## Decisions taken before Step 2
 
-- Test-running model for the Codex reviewer (options above). Recommendation: option 1.
-- Confirm 540 s default helper timeout.
+- Test-running model for the Codex reviewer: option 1 (helper runs tests; `run_by: helper`).
+- Default helper timeout: 540 s (`--timeout` overrides).
+
+## Step 2 — one review call, live results
+
+`uv run review-loop plan --file … --intent-file … --author <claude|codex>` reviewed a four-line sample plan in both directions on 2026-09-18:
+
+| Direction | Round 1 | Round 2 (`--session-id`, `--response-file`) |
+|---|---|---|
+| Claude author → Codex reviewer | `changes_requested`, 2 findings, 44 s | `approved` in the same thread, 22 s |
+| Codex author → Claude reviewer | `changes_requested`, 1 finding, 58 s | `approved` in the same session, 11 s |
+
+Both reviewers honoured the schema (Claude via `structured_output`, Codex via the `-o` file), echoed the helper-supplied version string, and cited real file locations from the read-only checkout. `REVIEW_LOOP_REVIEWER=1` on the helper's own environment exits 2 before any reviewer spawns. Timeout kills the reviewer's whole process group and removes the Codex schema/output temp directory (unit-tested with fake CLIs).
