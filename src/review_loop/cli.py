@@ -83,7 +83,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _add_cwd(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--cwd", type=Path, default=Path.cwd(), help="repository working directory")
+    p.add_argument(
+        "--cwd",
+        type=Path,
+        default=Path.cwd(),
+        help="repository working directory; relative file arguments resolve against it",
+    )
 
 
 def _timeout(text: str) -> float:
@@ -487,8 +492,21 @@ def _cmd_extend(args: argparse.Namespace) -> dict[str, Any]:
 # --- entry point -------------------------------------------------------------
 
 
+_PATH_ARGS = ("file", "intent_file", "response_file")
+
+
+def _anchor_paths(args: argparse.Namespace) -> None:
+    """Relative file arguments are relative to `--cwd` (the repository), not to the
+    process working directory; absolute ones are left alone."""
+    for name in _PATH_ARGS:
+        value = getattr(args, name, None)
+        if value is not None and not value.is_absolute():
+            setattr(args, name, args.cwd / value)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    _anchor_paths(args)
     try:
         result = args.func(args)
     except (CliError, StateError, GitHubError, RecursionGuardError, ValueError) as e:

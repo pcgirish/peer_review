@@ -719,3 +719,16 @@ def test_pr_budget_spent_after_tests_still_skips_the_reviewer(
     code, out, _ = run_cli(capsys, *pr_cmd(fake_pr, "--timeout", "1", test_command="true"))
     assert code == 2 and "exhausted the round's timeout" in out
     assert not fake_bin.exists()  # no reviewer was spawned
+
+
+def test_relative_file_paths_resolve_against_cwd(fake_bin, plan_files, repo, capsys, monkeypatch):
+    """`--file`, `--intent-file` and `--response-file` are relative to `--cwd`, not to
+    wherever the helper process happens to run."""
+    monkeypatch.chdir(repo.parent)
+    code, out, _ = run_cli(
+        capsys, *plan_cmd("docs/plan.md", "intent.md", repo), "--response-file", "intent.md"
+    )
+    assert code == 0, out
+    assert json.loads(out)["path"] == "docs/plan.md"
+    prompt = log_entries(fake_bin)[0]["argv"][-1]
+    assert "Build the thing." in prompt and "# Plan\nDo it." in prompt
