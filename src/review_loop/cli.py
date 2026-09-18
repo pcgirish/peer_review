@@ -12,10 +12,10 @@ from typing import Any
 from review_loop.adapters import AGENTS, reviewer_for
 from review_loop.prompt import build_reviewer_prompt
 from review_loop.runner import DEFAULT_TIMEOUT, RecursionGuardError, ReviewOutcome, run_review
-from review_loop.state import ArtifactState, StateError, Store, repo_paths
+from review_loop.state import ArtifactState, StateError, Store, repo_head, repo_paths
 from review_loop.version import plan_version
 
-EXIT_APPROVED, EXIT_CHANGES, EXIT_ERROR = 0, 1, 2
+EXIT_APPROVED, EXIT_CHANGES, EXIT_ERROR, EXIT_STALE = 0, 1, 2, 3
 
 
 class CliError(Exception):
@@ -127,11 +127,18 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
             )
         version = plan_version(content, state.intent)
         resumed = state.session_id is not None
+        snapshot = store.write_snapshot(
+            state.id, version, {"plan.md": content, "intent.md": state.intent}
+        )
+        head = repo_head(toplevel)
         prompt = build_reviewer_prompt(
             kind="plan",
             version=version,
             intent=state.intent,
-            artifact_label=f"Plan file: {rel}",
+            artifact_label=(
+                f"Plan file: {rel} (frozen copy under review: {snapshot / 'plan.md'}; "
+                "the working-tree file may change while you review)"
+            ),
             artifact_content=content,
             author_response=response,
         )
@@ -145,7 +152,15 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             on_session_id=lambda sid: _persist_session(store, state, sid),
         )
-        _record(state, outcome, version, response, resumed=resumed)
+        outcome = _stale_check(outcome, args, state, version)
+        _record(
+            state,
+            outcome,
+            version,
+            response,
+            resumed=resumed,
+            context={"snapshot": str(snapshot), "head": head},
+        )
         store.save(state)
     return {
         "artifact": state.id,
@@ -155,6 +170,29 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         "version": version,
         **outcome.to_dict(),
     }
+
+
+def _stale_check(
+    outcome: ReviewOutcome, args: argparse.Namespace, state: ArtifactState, version: str
+) -> ReviewOutcome:
+    """Re-derive the version from the live inputs after the review. The reviewer saw the
+    snapshot; if the file or intent moved on, its verdict must not be reported for the
+    new content (approval of an older snapshot is not approval of a changed file)."""
+    if outcome.status == "error":
+        return outcome
+    try:
+        now_content = _read(args.file, "plan file")
+        now_intent = _read(args.intent_file, "intent file") if args.intent_file else state.intent
+    except CliError as e:
+        return outcome.stale(f"inputs changed during review: {e}")
+    if plan_version(now_content, now_intent) == version:
+        return outcome
+    changed = []
+    if plan_version(now_content, state.intent) != version:
+        changed.append("plan file")
+    if now_intent != state.intent:
+        changed.append("intent")
+    return outcome.stale(f"{' and '.join(changed)} changed during review; verdict discarded")
 
 
 def _persist_session(store: Store, state: ArtifactState, sid: str) -> None:
@@ -171,18 +209,21 @@ def _record(
     response: str | None,
     *,
     resumed: bool,
+    context: dict[str, Any] | None = None,
 ) -> None:
     if outcome.session_id and not resumed:
         state.session_id = outcome.session_id
-    if outcome.status != "error":
+    counted = outcome.status in ("approved", "changes_requested")
+    if counted:
         state.rounds += 1
         state.reviewed_version = version
     state.last_status = outcome.status
     entry: dict[str, Any] = {
-        "round": state.rounds if outcome.status != "error" else None,
+        "round": state.rounds if counted else None,
         "version": version,
         "status": outcome.status,
         "author_response": response,
+        **(context or {}),
     }
     if outcome.review:
         entry["blocking_findings"] = outcome.review.blocking_findings
@@ -239,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(result, indent=2))
     if args.command != "plan":
         return EXIT_APPROVED
-    return {"approved": EXIT_APPROVED, "changes_requested": EXIT_CHANGES}.get(
+    return {"approved": EXIT_APPROVED, "changes_requested": EXIT_CHANGES, "stale": EXIT_STALE}.get(
         result["status"], EXIT_ERROR
     )
 

@@ -8,6 +8,12 @@ from review_loop.cli import main
 from review_loop.state import Store, repo_paths
 
 
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 @pytest.fixture
 def plan_files(repo):
     plan = repo / "docs" / "plan.md"
@@ -414,3 +420,82 @@ def test_reset_and_extend_act_on_the_locked_artifact_even_if_path_is_remapped(
     code, out, _ = run_cli(capsys, cmd, "docs/plan.md", "--cwd", str(repo), *extra)
     assert code == 0 and json.loads(out)["id"] == a
     assert store.load(b).limit == 3 and store.load(b).rounds == 1
+
+
+# --- Step 4: snapshots and stale checks ---------------------------------------
+
+
+def _mutate_during_review(monkeypatch, mutate):
+    """Run the real reviewer, but change author inputs while it is 'thinking'."""
+    import review_loop.cli as cli_mod
+
+    real = cli_mod.run_review
+    pending = [mutate]  # fires on the first review only
+
+    def wrapped(*a, **kw):
+        if pending:
+            pending.pop()()
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cli_mod, "run_review", wrapped)
+
+
+def test_snapshot_is_written_per_version_and_prompt_reviews_it(fake_bin, plan_files, repo, capsys):
+    plan, intent = plan_files
+    _, out, _ = run_cli(capsys, *plan_cmd(plan, intent, repo))
+    r = json.loads(out)
+    store = Store(repo_paths(repo).common_dir)
+    snap = store.snapshot_dir(r["artifact"]) / r["version"]
+    assert (snap / "plan.md").read_text() == plan.read_text()
+    assert (snap / "intent.md").read_text() == intent.read_text()
+    st = store.load(r["artifact"])
+    assert st.history[0]["snapshot"] == str(snap)
+    assert st.history[0]["head"] == _git(repo, "rev-parse", "HEAD")
+    prompt = log_entries(fake_bin)[0]["argv"][-1]
+    assert str(snap / "plan.md") in prompt, "reviewer is pointed at the frozen snapshot"
+
+
+@pytest.mark.parametrize("what", ["plan", "intent"])
+def test_input_changed_during_review_is_stale_and_never_approves(
+    fake_bin, plan_files, repo, capsys, monkeypatch, what
+):
+    plan, intent = plan_files
+    target = plan if what == "plan" else intent
+    _mutate_during_review(monkeypatch, lambda: target.write_text("edited mid-review"))
+    code, out, _ = run_cli(capsys, *plan_cmd(plan, intent, repo))
+    r = json.loads(out)
+    assert code == 3 and r["status"] == "stale"
+    assert r["review"] is None and "changed during review" in r["error"]
+    assert r["round"] == 0
+    st = Store(repo_paths(repo).common_dir).load(r["artifact"])
+    assert st.rounds == 0 and st.last_status == "stale" and st.reviewed_version is None
+    assert st.history[0]["status"] == "stale" and st.history[0]["round"] is None
+    assert st.session_id == r["session_id"], "stale keeps the session"
+
+
+def test_stale_when_only_intent_saved_state_changes_via_flag(
+    fake_bin, plan_files, repo, capsys, monkeypatch
+):
+    """Intent read from the flag is the reviewed intent; a later saved edit is not."""
+    plan, intent = plan_files
+    _, out1, _ = run_cli(capsys, *plan_cmd(plan, intent, repo))
+    intent.write_text("new intent")
+    code, out2, _ = run_cli(capsys, *plan_cmd(plan, intent, repo, author=None))
+    assert code == 0 and json.loads(out2)["version"] != json.loads(out1)["version"]
+
+
+def test_stale_result_does_not_retry_and_next_call_resumes(
+    fake_bin, plan_files, repo, capsys, monkeypatch
+):
+    plan, intent = plan_files
+    _mutate_during_review(monkeypatch, lambda: plan.write_text("edited"))
+    _, out1, _ = run_cli(capsys, *plan_cmd(plan, intent, repo))
+    assert len(log_entries(fake_bin)) == 1
+    code, out2, _ = run_cli(capsys, *plan_cmd(plan, None, repo, author=None))
+    r1, r2 = json.loads(out1), json.loads(out2)
+    assert code == 0 and r2["round"] == 1 and r2["session_id"] == r1["session_id"]
+    assert "resume" in log_entries(fake_bin)[1]["argv"]
+
+
+def test_git_helper_in_cli_tests(repo):
+    assert len(_git(repo, "rev-parse", "HEAD")) == 40

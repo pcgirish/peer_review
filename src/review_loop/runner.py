@@ -26,7 +26,7 @@ REVIEWER_ENV = "REVIEW_LOOP_REVIEWER"
 DEFAULT_TIMEOUT = 540.0
 _KILL_GRACE = 2.0
 
-Status = Literal["approved", "changes_requested", "error"]
+Status = Literal["approved", "changes_requested", "stale", "error"]
 
 
 class RecursionGuardError(RuntimeError):
@@ -41,6 +41,11 @@ class ReviewOutcome:
     review: ReviewResult | None
     error: str | None
     elapsed: float
+
+    def stale(self, reason: str) -> ReviewOutcome:
+        """The inputs changed while the reviewer worked: the verdict covers a version that
+        no longer exists, so it is discarded. Not an error, not a round."""
+        return ReviewOutcome("stale", self.reviewer, self.session_id, None, reason, self.elapsed)
 
     def to_dict(self) -> dict[str, Any]:
         return {
