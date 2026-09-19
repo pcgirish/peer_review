@@ -11,7 +11,8 @@ A single agent reviewing its own work misses what it misread the first time. A
 second, independent model with a persistent view of the artifact catches real
 defects and scope growth, and its memory of earlier rounds keeps the exchange
 short. This project makes that loop a one-line command inside either CLI, with
-guard rails so the loop cannot expand scope, approve stale input, or run forever.
+guard rails that discourage scope growth and prevent approving stale input or
+running forever.
 
 While building it, the loop reviewed its own pull requests and found four real
 defects before a human looked (see `docs/feasibility-probe.md`).

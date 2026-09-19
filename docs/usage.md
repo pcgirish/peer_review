@@ -117,9 +117,10 @@ reported by argparse on stderr with exit 2). A `plan` result:
 ```
 
 A `pr` result has `"pr": 42` instead of `path`, the version is `<head sha>+<intent
-hash>`, and `review` additionally carries `tests_run`:
+hash>`, and the `review` field additionally carries `tests_run`:
 
 ```json
+{
   "review": {
     "verdict": "approved",
     "reviewed_version": "58be8bae…+3f9e87972042",
@@ -128,6 +129,7 @@ hash>`, and `review` additionally carries `tests_run`:
     "tests_run": [{"command": "uv run pytest -q", "exit_code": 0, "run_by": "helper"}],
     "tests_not_run_reason": null
   }
+}
 ```
 
 With `--post-comment`, `comment` holds the comment URL or `comment_error` explains
