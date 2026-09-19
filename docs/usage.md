@@ -15,9 +15,10 @@ reviewer session, round count, and history.
 other one: author `claude` → reviewer `codex`, author `codex` → reviewer `claude`.
 Roles are saved on the first call and reused.
 
-**Intent.** The user's original request, verbatim, from `--intent-file`. It is part of
-the version identity, so editing it after a review makes the next review start from
-a changed version.
+**Intent.** The user's original request, verbatim, read from `--intent-file` and
+saved. Later calls reuse the saved text; editing the file has no effect unless
+`--intent-file` is passed again, which replaces the saved intent and, because the
+intent is part of the version identity, starts a new version.
 
 **Version.** Plans: hash of the plan content + hash of the intent. PRs: head commit SHA
 + hash of the intent. The reviewer must echo the version it reviewed; the helper
@@ -64,7 +65,9 @@ review-loop pr <number> [--response-file <path>] [--post-comment]
 - `--test-command` is required on the first review of a PR and saved. Before each
   review the helper checks the PR head out into a detached worktree under the state
   directory, runs the command there, then restores the worktree. The test output goes
-  to the reviewer as `run_by: helper`; the reviewer itself is read-only.
+  to the reviewer as `run_by: helper`; the reviewer is asked not to run or change
+  anything itself (see [What the reviewer sees](#what-the-reviewer-sees) for what is
+  actually enforced).
 - `--timeout` (default 540 s) is one deadline for the whole round: tests plus the
   reviewer call. If the tests use it up the reviewer is not started.
 - `--post-comment` makes the helper post the validated verdict as a plain PR comment
@@ -89,7 +92,8 @@ limit and keeps the session. `reset` retires the session, sets rounds/limit back
 
 ## Output
 
-Every command prints one JSON object. For `plan` and `pr`:
+Every command that runs prints one JSON object on stdout (argument errors are
+reported by argparse on stderr with exit 2). A `plan` result:
 
 ```json
 {
@@ -105,16 +109,29 @@ Every command prints one JSON object. For `plan` and `pr`:
     "verdict": "changes_requested",
     "reviewed_version": "51df055ce28c+2018a00e5929",
     "blocking_findings": ["…"],
-    "suggestions": ["…"],
-    "tests_run": [{"command": "uv run pytest -q", "exit_code": 0, "run_by": "helper"}]
+    "suggestions": ["…"]
   },
   "error": null,
   "elapsed_seconds": 24.3
 }
 ```
 
-`tests_run` appears for PRs only. With `--post-comment`, `comment` holds the comment
-URL or `comment_error` explains why posting failed.
+A `pr` result has `"pr": 42` instead of `path`, the version is `<head sha>+<intent
+hash>`, and `review` additionally carries `tests_run`:
+
+```json
+  "review": {
+    "verdict": "approved",
+    "reviewed_version": "58be8bae…+3f9e87972042",
+    "blocking_findings": [],
+    "suggestions": [],
+    "tests_run": [{"command": "uv run pytest -q", "exit_code": 0, "run_by": "helper"}],
+    "tests_not_run_reason": null
+  }
+```
+
+With `--post-comment`, `comment` holds the comment URL or `comment_error` explains
+why posting failed. Errors print `{"status": "error", "error": "…"}`.
 
 | exit | status | meaning |
 |---|---|---|
@@ -126,16 +143,26 @@ URL or `comment_error` explains why posting failed.
 ## What the reviewer sees
 
 The helper owns the prompt. It contains: the artifact (plan snapshot, or PR metadata,
-diff, and a read-only checkout path), the intent verbatim, the author's response for
+diff, and the path of a detached checkout of the head, which the reviewer is asked not to modify), the intent verbatim, the author's response for
 this round if any, the helper's test results for PRs, the version string to echo, and
 the review-scope rule: a finding blocks only for a concrete failure of an agreed
 requirement or a material defect, stated with trigger, consequence, and smallest
 sufficient fix. Everything else is a suggestion.
 
-Reviewers run with `REVIEW_LOOP_REVIEWER=1`; the helper refuses to start if that
-variable is set, so a reviewer cannot recursively request a review. Claude reviewers
-run with write tools disallowed in plan mode; Codex reviewers run with
-`--sandbox read-only`. These restrict the filesystem, not shared GitHub credentials.
+Reviewers run with `REVIEW_LOOP_REVIEWER=1` and the helper refuses to start when
+that variable is set. This guards against accidental recursion only; a reviewer that
+unsets the variable can bypass it.
+
+What is enforced differs by reviewer:
+
+- **Codex** runs under `--sandbox read-only`: filesystem writes are blocked by the
+  CLI. Network and the shared GitHub credentials are not restricted by it.
+- **Claude** runs in plan mode with the Write, Edit and NotebookEdit tools disallowed.
+  Its Bash tool is not sandboxed, so shell commands can still write, and the prompt's
+  instruction not to run or change anything is a request, not a guarantee.
+
+Neither setting makes GitHub credentials read-only. The reviewer never posts, pushes,
+or approves by design; only the helper posts comments, and only with `--post-comment`.
 
 ## State
 
@@ -163,5 +190,5 @@ when a plan or PR is ready. The skill never runs from a reviewer session.
 - PR heads are fetched from the remote named `origin`.
 - Reviews run in the foreground with one timeout; there are no detached workers.
 - Automatic skill activation is best-effort; there are no mandatory hooks.
-- Sandboxing protects the working tree, not GitHub credentials the reviewer's CLI
-  can already use.
+- Only the Codex reviewer is filesystem-sandboxed; the Claude reviewer's shell is
+  not. Neither is isolated from GitHub credentials its CLI can already use.

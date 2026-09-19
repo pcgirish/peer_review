@@ -20,8 +20,8 @@ defects before a human looked (see `docs/feasibility-probe.md`).
 
 - `review-loop plan` reviews a plan file against the user's original request.
 - `review-loop pr <number>` reviews a GitHub pull request: fetches it with `gh`,
-  checks the head out read-only, runs the project's tests, and hands the diff and
-  test output to the reviewer. Optionally posts each verdict as a plain PR comment.
+  checks the head out into a detached worktree, runs the project's tests, and hands
+  the diff and test output to the reviewer. Optionally posts each verdict as a plain PR comment.
 - The reviewer answers in validated JSON: `approved` or `changes_requested`, with
   blocking findings and suggestions. Malformed output is an error, never approval.
 - Inputs that change during a review are reported as `stale`; that round does not
