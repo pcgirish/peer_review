@@ -19,7 +19,7 @@ Use before merging a branch or PR, or whenever asked to review code.
 - `shell=True` or string-built commands with untrusted input
 - Reviewer restrictions loosened without saying so in the PR
 - A path where malformed reviewer output or a failed call counts as approval
-- A subprocess with no timeout or cleanup
+- A reviewer or test-command process with no timeout or cleanup
 - Tests that call real `claude`, `codex`, or GitHub
 - A change to the JSON output or exit codes without updating `docs/usage.md`
 

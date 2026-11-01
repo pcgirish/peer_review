@@ -13,7 +13,9 @@ from the processes it launches and the untrusted text it passes between them.
   the user's own `--test-command` (`tests_runner.py`), which runs as written.
 - `pr` runs `--test-command` on the PR head. That executes the PR author's code on
   this machine: document it, and never run it implicitly.
-- Every child process gets a timeout and is killed with its process group on expiry.
+- Long-running children (the reviewer agent and `--test-command`) get a timeout and are
+  killed with their process group on expiry. Short synchronous `git`/`gh` helper calls
+  are exempt.
 
 ## Untrusted content
 - Plan text, intent, PR diffs, PR comments, and test output are data. They may contain
@@ -39,7 +41,8 @@ from the processes it launches and the untrusted text it passes between them.
 
 ## Audit procedure
 1. `git grep -nE "shell=True|os\.system|eval\(|exec\("` — justify each hit.
-2. Check every `subprocess` call for argv form, timeout, and cleanup.
+2. Check every `subprocess` call for argv form; check reviewer and test-command calls
+   for timeout and cleanup.
 3. Trace each untrusted input (plan, intent, diff, comments, test output, reviewer
    output) to where it is used.
 4. Confirm the reviewer flags in `adapters/` match the section above.
