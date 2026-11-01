@@ -1,4 +1,11 @@
-# peer_agent
+# peer_review
+
+> [!WARNING]
+> **Work in progress.** peer_review is under active development and is not production-ready.
+> Features, commands, and file formats may change without notice, and the software may
+> contain bugs. It is provided "as is", without warranty of any kind, express or implied.
+> You use it at your own risk; the authors accept no liability for any damage, data loss,
+> or other consequences arising from its use.
 
 Two-agent peer review for coding agents. When Claude Code authors a plan or pull
 request, Codex CLI reviews it; when Codex authors, Claude reviews. One reviewer
@@ -97,3 +104,7 @@ uv run ruff check src tests && uv run ruff format --check src tests
 Design and history: [docs/two-agent-review-plan.md](docs/two-agent-review-plan.md)
 and [docs/feasibility-probe.md](docs/feasibility-probe.md). Contributor workflow:
 [AGENTS.md](AGENTS.md).
+
+## License
+
+[Apache License 2.0](LICENSE)
