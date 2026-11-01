@@ -1,4 +1,4 @@
-# peer_agent
+# peer_review
 
 Two-agent peer review for coding agents. When Claude Code authors a plan or pull
 request, Codex CLI reviews it; when Codex authors, Claude reviews. One reviewer
@@ -97,3 +97,7 @@ uv run ruff check src tests && uv run ruff format --check src tests
 Design and history: [docs/two-agent-review-plan.md](docs/two-agent-review-plan.md)
 and [docs/feasibility-probe.md](docs/feasibility-probe.md). Contributor workflow:
 [AGENTS.md](AGENTS.md).
+
+## License
+
+[Apache License 2.0](LICENSE)

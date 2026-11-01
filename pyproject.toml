@@ -2,8 +2,15 @@
 name = "review-loop"
 version = "0.1.0"
 description = "Two-agent peer review helper: Claude authors, Codex reviews, and vice versa."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "pcgirish" }]
 requires-python = ">=3.12"
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/pcgirish/peer_review"
 
 [project.scripts]
 review-loop = "review_loop.cli:main"

@@ -1,25 +1,27 @@
 ---
 name: project-testing
-description: peer_agent test-writing skill — coverage requirements (happy path, auth fail, validation fail, ownership), unit vs integration layout, conventions. Use when writing or reviewing tests in this repo.
+description: peer_review test-writing skill — what each change must cover, the fake claude/codex executables, temp git repos, and conventions. Use when writing or reviewing tests in this repo.
 ---
 
 # Testing Skill
 
-Use when writing or reviewing tests.
+TDD: write the failing test first (RED), make it pass (GREEN), then refactor.
 
-## Coverage Requirements
-Every new endpoint needs at minimum:
-1. Happy path (200/201 response, correct shape)
-2. Auth failure (401 when token missing or invalid)
-3. Validation failure (422/400 when required fields missing)
+## Coverage for each change
+1. Happy path: the expected JSON on stdout and the right exit code (0/1/2/3).
+2. Failure path: bad input, a missing file, a failing `gh` or agent call, or a timeout
+   gives `error`, never `approved`.
+3. State: rounds, session reuse, `stale`, and locks behave as specified.
 
 ## Conventions
-- Never share state between tests — each test is isolated
-- Unit tests: pure functions with mocked dependencies
-- Integration tests: full HTTP / service-level tests
+- Never call real `claude`, `codex`, or the GitHub API. Use the fake executables in
+  `tests/conftest.py` (select behaviour with `FAKE_MODE`; inspect calls via `FAKE_LOG`).
+- `gh` is faked the same way (the `fake_pr` fixture, with a local bare `origin`); no network.
+- Git-dependent tests create a temporary repo in `tmp_path`; never touch this checkout.
+- Each test is isolated: no shared state, no reliance on test order.
+- Keep timeouts short so the suite stays fast.
 
-## What NOT to test
-- Framework internals
-- Third-party library behaviour
+## What not to test
+- The agent CLIs' own behaviour, `gh`, or `git` internals.
 
-Run before every commit: `# fill in test command`
+Run before every commit: `uv run pytest -q`

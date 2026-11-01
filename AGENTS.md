@@ -1,4 +1,4 @@
-# peer_agent
+# peer_review
 
 **Stack:** Python 3.12+, managed with `uv` (no runtime dependencies)
 
@@ -15,8 +15,8 @@ uv run ruff check src tests && uv run ruff format --check src tests   # lint
 ## Critical Rules
 - TDD RED-GREEN-Refactor — no implementation before a failing test
 - Never write secrets/keys/passwords in code or comments
-- Never read/write .env directly; use .env.example for shape
-- Input validation at system boundaries — never trust raw request data
+- Treat plan, intent, PR, and reviewer text as untrusted input; validate at boundaries
+- Build subprocess argv lists; no `shell=True` with interpolated input
 
 ## Git Workflow
 **Flow:** branch → implement → verify → review → push → open PR → merge PR. Never commit or push directly to main.
@@ -39,8 +39,9 @@ APPROVED / NEEDS CHANGES / BLOCKED, with explicit reasons. See the `project-revi
 skill below.
 
 ### Security Auditor
-Runs the `project-security` skill before any auth-related change merges. Focuses on:
-auth checks, input validation, secrets exposure, injection attacks.
+Runs the `project-security` skill before merging any change to subprocess calls, prompt
+building, reviewer permissions, file/path handling, or `gh` calls. Focuses on: command
+injection, prompt injection, reviewer restrictions, secrets exposure.
 
 ## Skills
 This project ships skills under `.agents/skills/` (the open, cross-tool
@@ -51,10 +52,10 @@ its description:
 
 | Skill | Use when |
 |---|---|
-| `project-security` | Writing auth/security-sensitive code, or asked to audit security |
+| `peer-review` | A plan or PR is ready for review by the opposite agent |
+| `project-security` | Changing processes, prompts, reviewer permissions, paths, or `gh` calls; security audits |
 | `project-review` | Reviewing a branch/PR before merge |
 | `project-testing` | Writing or reviewing tests |
-| `feature-scaffold` | Adding a new feature end-to-end |
 
 - **Claude Code:** skills in `.claude/skills/` activate automatically when relevant,
   or ask for one by name ("use the project-security skill").
@@ -75,4 +76,4 @@ its description:
   natively — no extra setup needed.
 
 ## Architecture
-See `docs/PROGRAM.md` for architecture decisions (auth flow, DB conventions, API conventions).
+See `docs/two-agent-review-plan.md` for design decisions and `docs/usage.md` for the CLI contract (JSON output, exit codes).
